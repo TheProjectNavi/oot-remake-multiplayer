@@ -1,4 +1,4 @@
-# elf_recomp: x86-64 ELF to C
+# project4thepeople: x86-64 ELF to C
 
 A static recompiler. It reads the machine code of a 64-bit x86 ELF program, writes it out as C, and builds that C into a normal program for this PC. It works like the recompilers behind native PC versions of console games, such as N64Recomp: one C function per function in the program, with the CPU state kept in a struct.
 
@@ -20,9 +20,9 @@ What it does not do yet:
 Needs Python 3.10+, `pip install capstone`, and gcc or clang. The runtime is Linux-only for now.
 
 ```sh
-python tools/elf_recomp/elf_recomp.py info   program            # what is in the file
-python tools/elf_recomp/elf_recomp.py recomp program -o out/    # write C into out/
-python tools/elf_recomp/elf_recomp.py build  out/ -o program_pc # compile it with the runtime
+python tools/project4thepeople/project4thepeople.py info   program            # what is in the file
+python tools/project4thepeople/project4thepeople.py recomp program -o out/    # write C into out/
+python tools/project4thepeople/project4thepeople.py build  out/ -o program_pc # compile it with the runtime
 ./program_pc
 ```
 
@@ -49,7 +49,7 @@ L_401003: /* call 0x401100 */
 ## Tests
 
 ```sh
-python tools/elf_recomp/tests/test_elf_recomp.py -v
+python tools/project4thepeople/tests/test_project4thepeople.py -v
 ```
 
 The programs in `tests/programs/` are our own small C programs (arithmetic at every width, sorting with function pointers, a jump-table `switch`, CRC and bit tricks). Each is built with gcc and clang at `-O0` to `-Os`, with and without symbols, run, recompiled, run again, and the two runs must print the same text and return the same exit code. All 100 runs pass. The ELF reader has its own tests, including a PlayStation-typed header and refusing signed files. The tests are not in CI yet.

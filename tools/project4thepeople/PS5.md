@@ -1,18 +1,18 @@
 # PS5 programs: what is known and what a PC port would need
 
-This page collects public information about PS5 programs and sets out how far `elf_recomp` is from running one. Facts marked *(PS4)* come from PS4 work by the open-source emulator projects and the PS4 developer wiki; the PS5 is believed to follow it closely, but this repository has not checked it. Nothing here comes from a PS5 file.
+This page collects public information about PS5 programs and sets out how far project4thepeople is from running one. Facts marked *(PS4)* come from PS4 work by the open-source emulator projects and the PS4 developer wiki; the PS5 is believed to follow it closely, but this repository has not checked it. Nothing here comes from a PS5 file.
 
 ## The hardware
 
-- CPU: 8-core AMD Zen 2, x86-64. The same instruction set as a PC, so translating the CPU code is the easier part. `elf_recomp` already translates the integer part; floating point and vector instructions (SSE, AVX2) come next.
+- CPU: 8-core AMD Zen 2, x86-64. The same instruction set as a PC, so translating the CPU code is the easier part. project4thepeople already translates the integer part; floating point and vector instructions (SSE, AVX2) come next.
 - GPU: AMD, RDNA 2 family, with its own command format and shader machine code. A PC cannot run it as it is.
 - Memory: 16 GB GDDR6 shared by the CPU and GPU (unified memory). A PC has separate memory for each, and the port has to manage the difference.
 - Storage: a fast SSD with hardware decompression, which games use through system libraries.
 
 ## The program files
 
-- A game's main program is `eboot.bin`; its libraries are `.sprx` files. They are **SELF** files: ELF files that Sony has signed and encrypted. Reading one needs keys from the console. `elf_recomp` recognises the SELF header and refuses the file. It does not decrypt and never will.
-- A decrypted program is a 64-bit ELF with Sony's own file type numbers *(PS4)*: `ET_SCE_EXEC` (0xFE00), `ET_SCE_DYNEXEC` (0xFE10, the usual main program), `ET_SCE_DYNAMIC` (0xFE18, a library). `elf_recomp info` names them.
+- A game's main program is `eboot.bin`; its libraries are `.sprx` files. They are **SELF** files: ELF files that Sony has signed and encrypted. Reading one needs keys from the console. project4thepeople recognises the SELF header and refuses the file. It does not decrypt and never will.
+- A decrypted program is a 64-bit ELF with Sony's own file type numbers *(PS4)*: `ET_SCE_EXEC` (0xFE00), `ET_SCE_DYNEXEC` (0xFE10, the usual main program), `ET_SCE_DYNAMIC` (0xFE18, a library). `project4thepeople info` names them.
 - Extra segment types *(PS4)*: `PT_SCE_DYNLIBDATA` (the import and export tables), `PT_SCE_PROCPARAM` (process settings), `PT_SCE_MODULE_PARAM`, `PT_SCE_RELRO` (loaded like `PT_LOAD`), `PT_SCE_COMMENT`, `PT_SCE_LIBVERSION`.
 - Imports are not by name *(PS4)*. Each imported function has a **NID**: a short ID made by hashing its name. Emulators carry lists that turn NIDs back into names such as `sceKernelOpen` or `scePadRead`.
 
@@ -23,7 +23,7 @@ This page collects public information about PS5 programs and sets out how far `e
 
 ## What a PC port of a PS5 game would need
 
-| Part | What it means | Where `elf_recomp` is |
+| Part | What it means | Where project4thepeople is |
 |---|---|---|
 | A decrypted program | From the owner's own console. | Out of scope: this tool does not decrypt and does not help to. |
 | CPU code to C | Translate every function. | Integer instructions work and are tested. Floating point and vector instructions are not done yet. |

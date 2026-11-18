@@ -1,4 +1,4 @@
-/* Runtime for C code made by tools/elf_recomp: the CPU state, guest memory,
+/* Runtime for C code made by tools/project4thepeople: the CPU state, guest memory,
  * flag helpers, calls by address and system calls.
  *
  * Guest memory is one reserved block: guest address A is host address

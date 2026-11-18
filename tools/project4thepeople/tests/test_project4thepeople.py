@@ -1,11 +1,11 @@
-"""Tests for tools/elf_recomp.
+"""Tests for tools/project4thepeople.
 
 Each test program in tests/programs is built as a normal Linux program, run,
 then turned into C by the recompiler, built again and run. Both runs must
 print the same text and end with the same exit code.
 
 Needs Linux x86-64, gcc (clang too if installed) and `pip install capstone`.
-Run: python tools/elf_recomp/tests/test_elf_recomp.py -v
+Run: python tools/project4thepeople/tests/test_project4thepeople.py -v
 """
 
 import os
@@ -91,7 +91,7 @@ class ElfParseTest(unittest.TestCase):
 class RecompileTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="elf_recomp_test_")
+        cls.tmp = tempfile.mkdtemp(prefix="project4thepeople_test_")
 
     @classmethod
     def tearDownClass(cls):
@@ -107,10 +107,10 @@ class RecompileTest(unittest.TestCase):
         native = run([exe])
 
         out = exe + ".c"
-        r = run([sys.executable, os.path.join(TOOL, "elf_recomp.py"), "recomp", exe, "-o", out])
+        r = run([sys.executable, os.path.join(TOOL, "project4thepeople.py"), "recomp", exe, "-o", out])
         self.assertEqual(r.returncode, 0, r.stderr.decode())
         rexe = exe + ".recomp"
-        r = run([sys.executable, os.path.join(TOOL, "elf_recomp.py"), "build", out, "-o", rexe])
+        r = run([sys.executable, os.path.join(TOOL, "project4thepeople.py"), "build", out, "-o", rexe])
         self.assertEqual(r.returncode, 0, r.stderr.decode() + r.stdout.decode())
         recomp = run([rexe])
         self.assertEqual(recomp.stderr, b"", f"{tag}: {recomp.stderr.decode()}")

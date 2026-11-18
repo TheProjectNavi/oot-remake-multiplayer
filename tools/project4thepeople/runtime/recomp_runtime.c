@@ -1,4 +1,4 @@
-/* Runtime for C code made by tools/elf_recomp. Linux host for now.
+/* Runtime for C code made by tools/project4thepeople. Linux host for now.
  *
  * System calls: the guest is treated as a Linux x86-64 program, so a few
  * Linux calls are passed to the host with their pointers moved into guest
@@ -25,7 +25,7 @@ static uint64_t heap_brk = HEAP_START;
 
 void recomp_fail(const char *what, uint64_t addr) {
     fflush(stdout);
-    fprintf(stderr, "elf_recomp: %s at %#llx\n", what, (unsigned long long)addr);
+    fprintf(stderr, "project4thepeople: %s at %#llx\n", what, (unsigned long long)addr);
     exit(127);
 }
 

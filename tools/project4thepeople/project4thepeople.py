@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Static recompiler: x86-64 ELF program -> C source -> native program.
 
-  python elf_recomp.py info  program.elf
-  python elf_recomp.py recomp program.elf -o out/
-  python elf_recomp.py build  out/ -o program_recomp
+  python project4thepeople.py info  program.elf
+  python project4thepeople.py recomp program.elf -o out/
+  python project4thepeople.py build  out/ -o program_recomp
 
 See README.md for what works and what does not.
 """
@@ -80,13 +80,13 @@ def cmd_recomp(args):
     for part in range(0, len(funcs), FUNCS_PER_FILE):
         chunk = funcs[part:part + FUNCS_PER_FILE]
         with open(os.path.join(args.output, f"recomp_code_{part // FUNCS_PER_FILE}.c"), "w") as f:
-            f.write("/* Made by tools/elf_recomp. Do not edit. */\n#include \"recomp_funcs.h\"\n\n")
+            f.write("/* Made by tools/project4thepeople. Do not edit. */\n#include \"recomp_funcs.h\"\n\n")
             for fn in chunk:
                 f.write(tr.function_c(fn) + "\n\n")
                 insn_count += len(fn.insns)
 
     with open(os.path.join(args.output, "recomp_data.c"), "w") as f:
-        f.write("/* Made by tools/elf_recomp. Holds the program's own bytes: never commit it. */\n")
+        f.write("/* Made by tools/project4thepeople. Holds the program's own bytes: never commit it. */\n")
         f.write("#include \"recomp_funcs.h\"\n\n")
         segs = elf.load_segments()
         for i, s in enumerate(segs):
