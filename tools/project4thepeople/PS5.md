@@ -27,7 +27,8 @@ This page collects public information about PS5 programs and sets out how far pr
 | Part | What it means | Where project4thepeople is |
 |---|---|---|
 | A decrypted program | From the owner's own console. | Out of scope: this tool does not decrypt and does not help to. |
-| CPU code to C | Translate every function. | Integer, SSE and SSE2 instructions work and are tested. AVX and AVX2 (which a PS5 program can use) are not done yet. |
+| CPU code to C | Translate every function. | Done for what the Zen 2 CPU has and compilers use: integer, SSE to SSE4.1, AVX, AVX2, FMA3, BMI1/2. Tested with programs built for `-march=znver2`. |
+| Threads | Every game runs several. | Atomic instructions, one host thread per guest thread, thread-local storage. Tested with four threads. The PS5's own thread functions (`scePthread*`) still need PC versions. |
 | Loader and linker | Read `PT_SCE_DYNLIBDATA`, apply relocations, connect the NID imports. | Done for the PS4 layout and tested on our own programs rewritten in it: modules, libraries, NID-named imports, `RELATIVE` relocations. Not checked on a real PS5 file. |
 | System libraries | Write a PC version of every `libkernel` and `libSce*` function the game calls (hundreds of them, few documented): threads, memory, files, input, audio, saves. | The machinery is built and tested: imports are connected to PC versions in `runtime/system/`, and missing ones are reported by name (README, "System functions"). No PC version of a real PlayStation function exists yet: what each one does is not public, and it cannot be checked without a game. |
 | Graphics | Translate the GPU command buffers into Vulkan or Direct3D, and every shader from AMD machine code into SPIR-V. | Not started. This is the largest part. |

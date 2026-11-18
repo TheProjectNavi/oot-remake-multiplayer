@@ -57,6 +57,15 @@ extern const char *const recomp_import_names[];
 extern const uint64_t recomp_import_count;
 extern const RecompImportSlot recomp_import_slots[];
 extern const uint64_t recomp_import_slot_count;
+/* The program's thread-local storage template (PT_TLS), all zero if none. */
+typedef struct { uint64_t vaddr, filesz, memsz, align; } RecompTls;
+extern const RecompTls recomp_tls;
+
+/* Threads. Each guest thread runs on its own host thread with its own Ctx,
+ * guest stack and thread-local storage block. */
+uint64_t recomp_thread_spawn(uint64_t fn, uint64_t arg);   /* handle, 0 on failure */
+int recomp_thread_join(uint64_t handle);                   /* 0 on success */
+
 /* Pointers to write at start that are not in the file bytes. */
 typedef struct { uint64_t addr, value; } RecompFixup;
 extern const RecompFixup recomp_fixups[];

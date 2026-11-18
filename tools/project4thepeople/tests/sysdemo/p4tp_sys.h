@@ -14,6 +14,8 @@ unsigned sys_pad_read(int port);                            /* buttons this fram
 void sys_frame_end(void);                                   /* next frame */
 unsigned long sys_time_ms(void);                            /* a clock that never goes back */
 int sys_extra(int x);                                       /* has no PC version on purpose */
+long sys_thread_create(void (*fn)(void *), void *arg);      /* handle, 0 on failure */
+int sys_thread_join(long handle);                           /* 0 when done */
 
 #define PAD_UP 1u
 #define PAD_DOWN 2u

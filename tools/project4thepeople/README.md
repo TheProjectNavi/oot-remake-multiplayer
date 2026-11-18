@@ -7,7 +7,8 @@ It is an early tool for learning and research. What it does today:
 - Reads plain ELF files: segments, sections, symbols. It names PlayStation file types and segments, and refuses signed or encrypted files (a SELF). **It never decrypts anything.** Notes on PS5 files: [PS5.md](PS5.md).
 - Finds the functions: from symbols when the file has them; otherwise by following calls and jumps from the entry point, plus code addresses found in data (function pointer tables) and `switch` jump tables.
 - Translates the integer part of x86-64: moves, arithmetic and logic at every width with the CPU flags, multiply and divide, shifts and rotates, bit scans, conditional moves and sets, `rep movs`/`stos`, calls, returns, direct and indirect jumps, `syscall`.
-- Translates SSE and SSE2 (the x86-64 baseline, `sse.py`): float and double maths, compares, conversions, and the integer vector instructions compilers use for copies and vectorised loops.
+- Translates SSE up to SSE4.1 (`sse.py`) and AVX, AVX2 and FMA3 (`avx.py`), plus BMI1/BMI2: everything the PS5's CPU (AMD Zen 2) has that compilers use. A 256-bit register is kept as two 128-bit halves.
+- Threads: `lock`-prefixed instructions and `xchg` with memory become atomic host operations; each guest thread runs on a host thread with its own stack and thread-local storage (`__thread` variables, x86-64 variant II, as on Linux and FreeBSD).
 - Programs that can load at any address (PIE, and PlayStation programs): they are placed at 0x1000000 and their `R_X86_64_RELATIVE` relocations applied.
 - PlayStation programs (`sce.py`): reads the `PT_SCE_DYNLIBDATA` tables (needed modules, import libraries, symbols, relocations) and names each import from its NID ([below](#playstation-programs)).
 - Reads the program's imports (the functions it takes from system libraries) and connects each one to a PC version written in C ([below](#system-functions)). An import with no PC version yet is reported by name.
@@ -15,8 +16,9 @@ It is an early tool for learning and research. What it does today:
 
 What it does not do yet:
 
-- AVX, AVX2 and x87 instructions (PS5 games use AVX2). They become a `recomp_fail` call: the output builds, and stops with a message if one is reached. `recomp` lists how many there are.
-- Threads, signals, exceptions, thread-local storage, self-modifying code.
+- AVX-512 and x87 instructions (the PS5 has no AVX-512; x87 is rare in 64-bit code). They become a `recomp_fail` call: the output builds, and stops with a message if one is reached. `recomp` lists how many there are.
+- Signals, C++ exceptions (unwinding through recompiled code), self-modifying code, `cmpxchg16b`.
+- MXCSR rounding modes and float exceptions: the default rounding is always used.
 - PC versions of any real console library. Only the made-up test library has them. For a PlayStation program this is the main work: see [PS5.md](PS5.md).
 
 ## Use
@@ -99,13 +101,14 @@ python tools/project4thepeople/tests/test_project4thepeople.py -v
 
 The programs in `tests/programs/` are our own small C programs (arithmetic at every width, sorting with function pointers, a jump-table `switch`, CRC and bit tricks). Each is built with gcc and clang at `-O0` to `-Os`, with and without symbols, run, recompiled, run again, and the two runs must print the same text and return the same exit code. All of them pass.
 
-Every test program is also built position-independent (with and without symbols), and `floats.c` checks float and double maths bit for bit.
+Every test program is also built position-independent (with and without symbols), and for the PS5's CPU (`-march=znver2`), where the compilers use AVX2, FMA and BMI freely. `floats.c` checks float and double maths bit for bit; `vector.c` uses AVX2, FMA, SSE4 and BMI on purpose through intrinsics (built with `-DTRACE` it prints every intermediate value with its source line, which is how a wrong instruction is found).
+
+`tests/sysdemo/threads.c` runs four threads through the system library: atomic counters, a spinlock built on `xchg` and `lock cmpxchg`, and thread-local variables. Each recompiled build runs three times and must match the original every time. With atomic translation switched off the spinlock deadlocks, so a pass shows the locked instructions are atomic.
 
 The system function tests build the game in `tests/sysdemo/` with gcc and clang at `-O0`, `-O2` and `-Os`: normal, stripped, `-fno-plt` (imports called straight through the GOT), and position-independent. All 30 match. The same game rewritten in the PlayStation layout matches too, and an import without a known name is reported by its NID. Another test calls an import with no PC version and checks the report and `P4TP_STRICT`. The ELF reader has its own tests, including a PlayStation-typed header and refusing signed files. The tests are not in CI yet.
 
 ## Next steps
 
-1. AVX and AVX2 (256-bit registers): PS5 programs are built for a CPU that has them.
-2. Thread-local storage (`fs` base set up per thread) and threads.
-3. A way to replace any function by hand-written C (how recompiled ports patch and extend the game).
-4. A Windows runtime.
+1. A way to replace any function by hand-written C (how recompiled ports patch and extend the game).
+2. Faster output: flags only where something reads them, registers in C locals inside a function.
+3. A Windows runtime.

@@ -9,6 +9,7 @@
 #include "recomp_system.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -38,12 +39,71 @@ extern const uint64_t recomp_system_table_count;
 static void (**import_fns)(Ctx *);
 static uint8_t *import_reported;
 
+static pthread_mutex_t alloc_lock = PTHREAD_MUTEX_INITIALIZER;
+
 uint64_t recomp_guest_alloc(uint64_t size) {
+    pthread_mutex_lock(&alloc_lock);
     uint64_t at = (alloc_next + 15) & ~15ull;
     if (size > ALLOC_END - at) recomp_fail("out of guest memory for system allocations", size);
     alloc_next = at + size;
+    pthread_mutex_unlock(&alloc_lock);
     memset(recomp_mem + at, 0, size);
     return at;
+}
+
+/* Thread-local storage, x86-64 "variant II" (Linux and FreeBSD, so also the
+ * PlayStation): the block sits just below the thread pointer (FS base), and
+ * the first word at the thread pointer points to itself. */
+static void setup_tls(Ctx *c) {
+    uint64_t align = recomp_tls.align > 16 ? recomp_tls.align : 16;
+    uint64_t size = (recomp_tls.memsz + align - 1) & ~(align - 1);
+    uint64_t block = recomp_guest_alloc(size + align + 64);
+    uint64_t tp = (block + size + align - 1) & ~(align - 1);
+    if (recomp_tls.filesz)
+        memcpy(recomp_mem + tp - size, recomp_mem + recomp_tls.vaddr, recomp_tls.filesz);
+    WR64(tp, tp);
+    c->fs_base = tp;
+}
+
+#define MAX_THREADS 256
+#define THREAD_STACK (1ull << 20)
+#define THREAD_DONE 0xFFFFFFFFFFFFFFF0ull   /* return address a thread's function returns to */
+
+typedef struct { Ctx ctx; uint64_t fn; pthread_t host; int used; } GuestThread;
+static GuestThread threads[MAX_THREADS];
+static pthread_mutex_t threads_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void *run_thread(void *p) {
+    GuestThread *t = p;
+    recomp_dispatch(&t->ctx, t->fn);
+    return NULL;
+}
+
+uint64_t recomp_thread_spawn(uint64_t fn, uint64_t arg) {
+    pthread_mutex_lock(&threads_lock);
+    uint64_t i = 1;
+    while (i < MAX_THREADS && threads[i].used) i++;
+    if (i == MAX_THREADS) { pthread_mutex_unlock(&threads_lock); return 0; }
+    threads[i].used = 1;
+    pthread_mutex_unlock(&threads_lock);
+    GuestThread *t = &threads[i];
+    memset(&t->ctx, 0, sizeof t->ctx);
+    t->fn = fn;
+    uint64_t stack = recomp_guest_alloc(THREAD_STACK);
+    t->ctx.r[RSP] = (stack + THREAD_STACK - 64) & ~15ull;
+    PUSH(&t->ctx, THREAD_DONE);   /* as if called: the function's ret pops this */
+    t->ctx.r[RDI] = arg;
+    t->ctx.mxcsr = 0x1f80;
+    setup_tls(&t->ctx);
+    if (pthread_create(&t->host, NULL, run_thread, t) != 0) { t->used = 0; return 0; }
+    return i;
+}
+
+int recomp_thread_join(uint64_t handle) {
+    if (handle == 0 || handle >= MAX_THREADS || !threads[handle].used) return -1;
+    pthread_join(threads[handle].host, NULL);
+    threads[handle].used = 0;
+    return 0;
 }
 
 static void (*find_system_fn(const char *name))(Ctx *) {
@@ -198,6 +258,8 @@ int main(int argc, char **argv) {
     /* Start-up stack as Linux builds it: argc, argv[], NULL, envp NULL, auxv AT_NULL. */
     Ctx c;
     memset(&c, 0, sizeof c);
+    c.mxcsr = 0x1f80;
+    setup_tls(&c);   /* after the fixups: the template can hold pointers */
     uint64_t sp = STACK_TOP - 256;
     const char *name = argv[0];
     size_t len = strlen(name) + 1;

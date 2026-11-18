@@ -56,7 +56,7 @@ CONDS = {
 
 TERMINATORS = {"jmp", "ret", "hlt", "ud2", "int3"}
 IGNORED = {"nop", "endbr64", "endbr32", "pause", "prefetcht0", "prefetcht1",
-           "prefetcht2", "prefetchnta", "prefetchw", "lfence", "mfence", "sfence", "cld"}
+           "prefetcht2", "prefetchnta", "prefetchw", "cld"}
 
 
 def mask(bits):
@@ -392,6 +392,8 @@ class Translator:
         prefix = ""
         if m.startswith(("rep ", "repe ", "repz ", "repne ", "repnz ")):
             prefix, m = m.split(" ", 1)
+        if m.startswith("lock "):
+            m = m.split(" ", 1)[1]   # handled by atomic(), which checks insn.prefix
         if m.startswith("notrack "):
             m = m.split(" ", 1)[1]
         if m.startswith("bnd "):
@@ -399,6 +401,12 @@ class Translator:
 
         if m in IGNORED:
             return []
+        if m in ("mfence", "lfence", "sfence"):
+            return ["__atomic_thread_fence(__ATOMIC_SEQ_CST);"]
+
+        atomic = self.atomic(insn, m, ops, pre)
+        if atomic is not None:
+            return ["{ " + " ".join(pre.lines + atomic) + " }"]
 
         try:
             vec = self.avx.translate(fn, insn, m, ops, pre)
@@ -701,6 +709,72 @@ class Translator:
         if not lines:
             return []
         return ["{ " + " ".join(lines) + " }"]
+
+    def atomic(self, insn, m, ops, pre):
+        """`lock`-prefixed read-modify-write on memory, and xchg with memory
+        (always locked), as one atomic host operation. Other threads see them
+        happen at once, as on the CPU. None if the instruction is not one."""
+        locked = X.X86_PREFIX_LOCK in insn.prefix
+        if not ops or ops[0].type != X.X86_OP_MEM:
+            if m == "xchg" and len(ops) == 2 and ops[1].type == X.X86_OP_MEM:
+                ops = [ops[1], ops[0]]
+            else:
+                return None
+        if not locked and m != "xchg":
+            return None
+        bits = ops[0].size * 8
+        a = self.addr_var(ops[0], insn, pre)
+        ptr = f"((uint{bits}_t *)(recomp_mem + {a}))"
+        seq = "__ATOMIC_SEQ_CST"
+        mk = hx(mask(bits))
+        if m in ("add", "sub", "and", "or", "xor"):
+            b, _ = self.read(ops[1], insn, pre)
+            b = f"(({b}) & {mk})"
+            fetch = {"add": "add", "sub": "sub", "and": "and", "or": "or", "xor": "xor"}[m]
+            out = [f"uint64_t b = {b};", f"uint64_t old = __atomic_fetch_{fetch}({ptr}, (uint{bits}_t)b, {seq});"]
+            if m == "add":
+                out.append(f"F_ADD(c, old, b, 0, {bits});")
+            elif m == "sub":
+                out.append(f"F_SUB(c, old, b, 0, {bits});")
+            else:
+                op = {"and": "&", "or": "|", "xor": "^"}[m]
+                out.append(f"F_LOGIC(c, old {op} b, {bits});")
+            return out
+        if m in ("inc", "dec"):
+            fetch = "add" if m == "inc" else "sub"
+            return [f"uint64_t old = __atomic_fetch_{fetch}({ptr}, 1, {seq});",
+                    f"{'F_INC' if m == 'inc' else 'F_DEC'}(c, old, {bits});"]
+        if m in ("neg", "not"):
+            e = "(0 - old)" if m == "neg" else "(~old)"
+            out = [f"uint{bits}_t old = __atomic_load_n({ptr}, {seq}), nv;",
+                   f"do {{ nv = (uint{bits}_t){e}; }} while (!__atomic_compare_exchange_n({ptr}, &old, nv, 0, {seq}, {seq}));"]
+            if m == "neg":
+                out.append(f"F_NEG(c, old, {bits});")
+            return out
+        if m == "xadd":
+            b, _ = self.read(ops[1], insn, pre)
+            return [f"uint64_t b = ({b}) & {mk};",
+                    f"uint64_t old = __atomic_fetch_add({ptr}, (uint{bits}_t)b, {seq});",
+                    f"F_ADD(c, old, b, 0, {bits});", self.write(ops[1], insn, pre, "old")]
+        if m == "xchg":
+            b, _ = self.read(ops[1], insn, pre)
+            return [f"uint64_t old = __atomic_exchange_n({ptr}, (uint{bits}_t)({b}), {seq});",
+                    self.write(ops[1], insn, pre, "old")]
+        if m == "cmpxchg":
+            b, _ = self.read(ops[1], insn, pre)
+            acc = {8: "(c->r[RAX] & 0xFF)", 16: "(c->r[RAX] & 0xFFFF)",
+                   32: "(c->r[RAX] & 0xffffffffull)", 64: "c->r[RAX]"}[bits]
+            return [f"uint64_t want = {acc};", f"uint{bits}_t seen = (uint{bits}_t)want;",
+                    f"int ok = __atomic_compare_exchange_n({ptr}, &seen, (uint{bits}_t)({b}), 0, {seq}, {seq});",
+                    f"F_SUB(c, want, seen, 0, {bits});",
+                    "if (!ok) { " + self.reg_write(self._acc_reg(bits), insn, "seen") + " }"]
+        if m in ("bts", "btr", "btc") and ops[1].type == X.X86_OP_IMM:
+            k = ops[1].imm & (bits - 1)
+            fetch = {"bts": "or", "btr": "and", "btc": "xor"}[m]
+            val = f"~(1ull << {k})" if m == "btr" else f"(1ull << {k})"
+            return [f"uint64_t old = __atomic_fetch_{fetch}({ptr}, (uint{bits}_t)({val}), {seq});",
+                    f"c->cf = (old >> {k}) & 1;"]
+        raise Unsupported(f"locked {m}")
 
     @staticmethod
     def _acc_reg(bits):

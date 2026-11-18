@@ -59,8 +59,8 @@ def pie_flags(flags):
     return [f for f in flags if f not in ("-static", "-fno-pie", "-no-pie")] + ["-fpie", "-pie"]
 
 
-def run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, timeout=300, **kw)
+def run(cmd, timeout=300, **kw):
+    return subprocess.run(cmd, capture_output=True, timeout=timeout, **kw)
 
 
 class ElfParseTest(unittest.TestCase):
@@ -208,9 +208,8 @@ class SystemLibraryTest(unittest.TestCase):
             f.write(PAD_SCRIPT)
         with open(os.path.join(cls.tmp, "p4tp_data.txt"), "w") as f:
             f.write("hello from a file\n")
-        r = run(["gcc", "-O2", "-shared", "-fPIC", "-nostdlib", "-fno-builtin",
-                 "-fno-tree-loop-distribute-patterns", "-fno-stack-protector",
-                 os.path.join(SYSDEMO, "p4tp_sys.c"), "-o", os.path.join(cls.tmp, "libp4tp_sys.so")])
+        r = run(["gcc", "-O2", "-shared", "-fPIC", "-fno-builtin", "-fno-tree-loop-distribute-patterns",
+                 os.path.join(SYSDEMO, "p4tp_sys.c"), "-o", os.path.join(cls.tmp, "libp4tp_sys.so"), "-pthread"])
         assert r.returncode == 0, r.stderr.decode()
 
     @classmethod
@@ -251,6 +250,34 @@ class SystemLibraryTest(unittest.TestCase):
                         self.assertEqual(recomp.stderr, b"")
                         self.assertEqual(native.stdout, recomp.stdout)
                         self.assertEqual(native.returncode, recomp.returncode)
+
+    def test_threads(self):
+        """Four threads: atomic counters, a spinlock, thread-local variables.
+        Without atomic translation the spinlock deadlocks, so a pass shows
+        the locked instructions are atomic."""
+        sys.path.insert(0, HERE)
+        import make_sce
+        variants = [("-O0", ()), ("-O2", ()), ("-O2", ("-pie",))]
+        if HAVE_ZEN2_FEATURES:
+            variants.append(("-O2", ("-pie", "-march=znver2")))
+        for cc in COMPILERS:
+            for opt, extra in variants:
+                with self.subTest(cc=cc, opt=opt, extra=extra):
+                    exe, rexe = self.build("threads", cc, opt, extra)
+                    native = run([exe], cwd=self.tmp)
+                    self.assertIn(b"atomic 800000", native.stdout)
+                    for _ in range(3):
+                        recomp = run([rexe], cwd=self.tmp, timeout=120)
+                        self.assertEqual(recomp.stderr, b"")
+                        self.assertEqual(native.stdout, recomp.stdout)
+                        self.assertEqual(native.returncode, recomp.returncode)
+                    if "-pie" in extra:
+                        ps = exe + ".sce"
+                        make_sce.convert(exe, ps)
+                        tool = os.path.join(TOOL, "project4thepeople.py")
+                        self.assertEqual(run([sys.executable, tool, "recomp", ps, "-o", ps + ".c"]).returncode, 0)
+                        self.assertEqual(run([sys.executable, tool, "build", ps + ".c", "-o", ps + ".recomp"]).returncode, 0)
+                        self.assertEqual(run([ps + ".recomp"], cwd=self.tmp, timeout=120).stdout, native.stdout)
 
     def test_missing_function_is_reported(self):
         exe, rexe = self.build("extra", COMPILERS[0], "-O2")

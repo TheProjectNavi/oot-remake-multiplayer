@@ -63,7 +63,13 @@ static void pc_sys_time_ms(Ctx *c) {
     RETURN((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
 }
 
+/* Threads: the runtime runs each guest thread on a host thread. */
+static void pc_sys_thread_create(Ctx *c) { RETURN(recomp_thread_spawn(ARG0, ARG1)); }
+static void pc_sys_thread_join(Ctx *c) { RETURN((uint64_t)(int64_t)recomp_thread_join(ARG0)); }
+
 RECOMP_SYSTEM_TABLE(recomp_system_p4tp,
+    { "sys_thread_create", pc_sys_thread_create },
+    { "sys_thread_join", pc_sys_thread_join },
     { "sys_print", pc_sys_print },
     { "sys_file_open", pc_sys_file_open },
     { "sys_file_read", pc_sys_file_read },

@@ -157,6 +157,12 @@ def cmd_recomp(args):
                 n_slots += 1
         f.write("    { 0, 0, 0 } };\n")
         f.write(f"const uint64_t recomp_import_slot_count = {n_slots};\n")
+        tls = next((sg for sg in elf.segments if sg.type == elfparse.PT_TLS), None)
+        if tls:
+            f.write(f"const RecompTls recomp_tls = {{ {tls.vaddr:#x}ull, {tls.filesz:#x}ull, "
+                    f"{tls.memsz:#x}ull, {tls.align:#x}ull }};\n")
+        else:
+            f.write("const RecompTls recomp_tls = { 0, 0, 0, 0 };\n")
         f.write("const RecompFixup recomp_fixups[] = {\n")
         for addr, value in elf.fixups:
             f.write(f"    {{ {addr:#x}ull, {value:#x}ull }},\n")
@@ -186,7 +192,7 @@ def cmd_build(args):
     system_dir = os.path.join(RUNTIME_DIR, "system")
     sources += sorted(os.path.join(system_dir, n) for n in os.listdir(system_dir) if n.endswith(".c"))
     cmd = [cc, f"-O{args.opt}", "-w", "-fwrapv", "-ffp-contract=off", "-I", RUNTIME_DIR, "-I", args.dir,
-           *sources, "-lm", "-o", args.output]
+           *sources, "-lm", "-pthread", "-o", args.output]
     print(" ".join(cmd))
     return subprocess.run(cmd).returncode
 

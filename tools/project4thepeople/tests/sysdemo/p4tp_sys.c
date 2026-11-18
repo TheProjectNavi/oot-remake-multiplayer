@@ -1,5 +1,5 @@
-/* The "console" side of the made-up system library: a shared library with
- * no C library, Linux system calls only. The controller reads its button
+/* The "console" side of the made-up system library: a shared library using
+ * Linux system calls, and the C library's threads. The controller reads its button
  * states from p4tp_pad.txt in the current folder, one number per frame. */
 #include "p4tp_sys.h"
 
@@ -53,3 +53,29 @@ unsigned long sys_time_ms(void) {
     return (unsigned long)ts[0] * 1000ul + (unsigned long)ts[1] / 1000000ul;
 }
 int sys_extra(int x) { return x * 2; }
+
+#include <pthread.h>
+
+typedef struct { void (*fn)(void *); void *arg; } start_t;
+static start_t starts[256];
+static pthread_t ids[256];
+static int next_handle = 1;
+
+static void *trampoline(void *p) {
+    start_t *s = p;
+    s->fn(s->arg);
+    return 0;
+}
+
+long sys_thread_create(void (*fn)(void *), void *arg) {
+    int h = __atomic_fetch_add(&next_handle, 1, __ATOMIC_SEQ_CST);
+    if (h >= 256) return 0;
+    starts[h].fn = fn;
+    starts[h].arg = arg;
+    return pthread_create(&ids[h], 0, trampoline, &starts[h]) == 0 ? h : 0;
+}
+
+int sys_thread_join(long h) {
+    if (h <= 0 || h >= 256) return -1;
+    return pthread_join(ids[h], 0);
+}

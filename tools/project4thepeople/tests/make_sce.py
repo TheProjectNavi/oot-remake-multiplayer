@@ -6,7 +6,8 @@ What changes:
 - e_type becomes ET_SCE_DYNEXEC and the OS ABI FreeBSD;
 - the imports, relocations and strings move into a new PT_SCE_DYNLIBDATA
   segment with DT_SCE_* tags, and imported symbols are named "NID#L#M";
-- section headers, PT_INTERP and PT_PHDR are dropped (a shipped program has
+- section headers, PT_INTERP and PT_PHDR are dropped (PT_TLS is kept, as
+  PlayStation programs have it too) (a shipped program has
   no section names either).
 The code and data bytes are not touched.
 
@@ -105,7 +106,7 @@ def convert(src, dst):
     for i in range(e_phnum):
         ph = bytes(data[e_phoff + i * 56:e_phoff + i * 56 + 56])
         p_type = struct.unpack_from("<I", ph)[0]
-        if p_type in (elfparse.PT_LOAD, 0x6474E551, 0x6474E552):  # LOAD, GNU_STACK, GNU_RELRO
+        if p_type in (elfparse.PT_LOAD, elfparse.PT_TLS, 0x6474E551, 0x6474E552):  # + GNU_STACK, GNU_RELRO
             keep.append(ph)
     keep.append(struct.pack("<IIQQQQQQ", sce.PT_DYNAMIC, 4, dyn_off, 0, 0, len(dyn_bytes), len(dyn_bytes), 8))
     keep.append(struct.pack("<IIQQQQQQ", sce.PT_SCE_DYNLIBDATA, 4, blob_off, 0, 0, len(blob), len(blob), 16))
