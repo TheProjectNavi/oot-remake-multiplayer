@@ -18,9 +18,13 @@ typedef union {
     float f[4]; double g[2];
 } Xmm;
 
+/* x[0..15] are XMM0-15 (the low 128 bits of YMM0-15) and xh[] their upper
+ * 128 bits. x[16..23] are scratch registers the AVX translation uses. */
+#define XREGS 24
 typedef struct {
     uint64_t r[16];
-    Xmm x[16];
+    Xmm x[XREGS];
+    Xmm xh[XREGS];
     uint64_t fs_base, gs_base;
     uint32_t mxcsr;
     uint8_t cf, zf, sf, of, pf, df;
@@ -98,6 +102,18 @@ static inline uint64_t CVT_I64(double v) {
 }
 /* Round to nearest even (the default MXCSR rounding). */
 static inline double RNE(double v) { return __builtin_nearbyint(v); }
+
+/* Fused multiply-add: one rounding, as the FMA instructions do. */
+static inline float  FMAF(float a, float b, float c)    { return __builtin_fmaf(a, b, c); }
+static inline double FMAD(double a, double b, double c) { return __builtin_fma(a, b, c); }
+static inline float  ROUNDF(float v, int mode) {
+    switch (mode & 3) { case 1: return __builtin_floorf(v); case 2: return __builtin_ceilf(v);
+                        case 3: return __builtin_truncf(v); default: return __builtin_nearbyintf(v); }
+}
+static inline double ROUNDD(double v, int mode) {
+    switch (mode & 3) { case 1: return __builtin_floor(v); case 2: return __builtin_ceil(v);
+                        case 3: return __builtin_trunc(v); default: return __builtin_nearbyint(v); }
+}
 
 /* COMISS/UCOMISS/COMISD/UCOMISD. */
 static inline void F_UCOMI(Ctx *c, double a, double b) {

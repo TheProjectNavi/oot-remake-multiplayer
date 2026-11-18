@@ -36,6 +36,20 @@ try:
 except ImportError:
     HAVE_CAPSTONE = False
 
+def cpu_has(*flags):
+    try:
+        with open("/proc/cpuinfo") as f:
+            have = set(f.read().split())
+    except OSError:
+        return False
+    return all(fl in have for fl in flags)
+
+
+# The PS5 CPU (AMD Zen 2): AVX2, FMA, BMI1/2 and the rest. Programs built for
+# it only run on a host that has the same instructions.
+PS5_CPU = ["-march=znver2"]
+HAVE_ZEN2_FEATURES = cpu_has("avx2", "fma", "bmi1", "bmi2", "f16c", "movbe")
+
 CAN_RUN = platform.system() == "Linux" and platform.machine() in ("x86_64", "AMD64") and COMPILERS
 
 
@@ -118,13 +132,13 @@ class RecompileTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def check(self, cc, opt, prog, strip, pie=False):
-        tag = f"{prog}-{cc}{opt}{'-s' if strip else ''}{'-pie' if pie else ''}"
+    def check(self, cc, opt, prog, strip, pie=False, cpu=()):
+        tag = f"{prog}-{cc}{opt}{'-s' if strip else ''}{'-pie' if pie else ''}{''.join(cpu)}"
         exe = os.path.join(self.tmp, tag)
         src = os.path.join(HERE, "programs", prog + ".c")
         extra = ["-s"] if strip else []
         flags = pie_flags(FLAGS) if pie else FLAGS
-        r = run([cc, opt, *flags, src, "-lgcc", *extra, "-o", exe])
+        r = run([cc, opt, *flags, *cpu, src, "-lgcc", *extra, "-o", exe])
         self.assertEqual(r.returncode, 0, r.stderr.decode())
         native = run([exe])
 
@@ -145,6 +159,18 @@ class RecompileTest(unittest.TestCase):
                 for prog in PROGRAMS:
                     with self.subTest(cc=cc, opt=opt, prog=prog):
                         self.check(cc, opt, prog, strip=False)
+
+    @unittest.skipUnless(HAVE_ZEN2_FEATURES, "the host CPU lacks AVX2/FMA/BMI2")
+    def test_ps5_cpu(self):
+        """Built for the PS5's CPU: the compilers use AVX2, FMA and BMI freely,
+        and vector.c uses the rest on purpose."""
+        for cc in COMPILERS:
+            for opt in OPT_LEVELS:
+                for prog in PROGRAMS + ["vector"]:
+                    with self.subTest(cc=cc, opt=opt, prog=prog):
+                        self.check(cc, opt, prog, strip=False, cpu=PS5_CPU)
+                with self.subTest(cc=cc, opt=opt, prog="vector", pie=True, strip=True):
+                    self.check(cc, opt, "vector", strip=True, pie=True, cpu=PS5_CPU)
 
     def test_load_anywhere(self):
         """Position-independent programs (as console programs are): moved to a
@@ -211,6 +237,8 @@ class SystemLibraryTest(unittest.TestCase):
 
     def test_game_matches(self):
         variants = [(), ("-s",), ("-fno-plt",), ("-pie",), ("-pie", "-s")]
+        if HAVE_ZEN2_FEATURES:
+            variants.append(("-pie", "-march=znver2"))
         for cc in COMPILERS:
             for opt in ("-O0", "-O2", "-Os"):
                 for extra in variants:

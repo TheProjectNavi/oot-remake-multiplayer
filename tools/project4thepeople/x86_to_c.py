@@ -18,6 +18,7 @@ from capstone import x86_const as X
 
 from elfparse import Elf
 from sse import SSE, NotSSE
+from avx import AVX
 
 REG64 = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
          "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
@@ -275,6 +276,7 @@ class Translator:
         self.funcs = {f.addr: f for f in funcs}
         self.unsupported = {}
         self.sse = SSE(self)
+        self.avx = AVX(self, self.sse)
 
     # ---- operands ----
     def reg_read(self, reg_id, insn):
@@ -340,7 +342,7 @@ class Translator:
         for k, name in pre.addr_vars:
             if k == key:
                 return name
-        name = f"a{len(pre.addr_vars)}"
+        name = f"ea{len(pre.addr_vars)}"   # "ea": never the same as a local of the generated code
         pre.lines.append(f"uint64_t {name} = {self.mem_addr(op, insn)};")
         pre.addr_vars.append((key, name))
         return name
@@ -399,7 +401,9 @@ class Translator:
             return []
 
         try:
-            vec = self.sse.translate(fn, insn, m, ops, pre)
+            vec = self.avx.translate(fn, insn, m, ops, pre)
+            if vec is None:
+                vec = self.sse.translate(fn, insn, m, ops, pre)
         except NotSSE as e:
             raise Unsupported(str(e))
         if vec is not None:
@@ -596,6 +600,66 @@ class Translator:
                 raise Unsupported(f"{prefix} prefix")
             else:
                 body.append(step)
+        elif m in ("shlx", "shrx", "sarx"):
+            a, bits = rd(1)
+            n, _ = rd(2)
+            n = f"(({n}) & {bits - 1})"
+            if m == "shlx":
+                e = f"(({a}) << {n})"
+            elif m == "shrx":
+                e = f"(({a}) >> {n})"
+            else:
+                e = f"(uint64_t)((int64_t)SEXT({a}, {bits}) >> {n})"
+            body.append(wr(0, f"({e}) & {hx(mask(bits))}"))
+        elif m == "rorx":
+            a, bits = rd(1)
+            k = ops[2].imm % bits
+            e = f"((({a}) >> {k}) | (({a}) << {bits - k})) & {hx(mask(bits))}" if k else a
+            body.append(wr(0, e))
+        elif m == "andn":
+            a, bits = rd(1)
+            b, _ = rd(2)
+            body.append(wr(0, f"F_LOGIC(c, ~({a}) & ({b}), {bits})"))
+        elif m in ("blsr", "blsi", "blsmsk"):
+            a, bits = rd(1)
+            body.append(f"uint64_t s = {a};")
+            e = {"blsr": "s & (s - 1)", "blsi": "s & (0 - s)", "blsmsk": "s ^ (s - 1)"}[m]
+            body.append(f"uint64_t r = ({e}) & {hx(mask(bits))};")
+            body.append(f"SZP(c, r, {bits}); c->of = 0;")
+            body.append({"blsr": "c->cf = s == 0;", "blsi": "c->cf = s != 0;", "blsmsk": "c->cf = s == 0; c->zf = 0;"}[m])
+            body.append(wr(0, "r"))
+        elif m == "bzhi":
+            a, bits = rd(1)
+            n, _ = rd(2)
+            body.append(f"uint64_t n = ({n}) & 0xFF, s = {a};")
+            body.append(f"uint64_t r = n >= {bits} ? s : (s & ((1ull << n) - 1));")
+            body.append(f"c->cf = n > {bits - 1}; SZP(c, r, {bits}); c->of = 0;")
+            body.append(wr(0, "r"))
+        elif m == "bextr":
+            a, bits = rd(1)
+            n, _ = rd(2)
+            body.append(f"uint64_t ctl = {n}, s = {a}; uint64_t st = ctl & 0xFF, ln = (ctl >> 8) & 0xFF;")
+            body.append(f"uint64_t r = st >= {bits} ? 0 : (s >> st); if (ln < 64) r &= (1ull << ln) - 1;")
+            body.append(f"c->zf = r == 0; c->cf = c->of = 0;")
+            body.append(wr(0, "r"))
+        elif m in ("pdep", "pext"):
+            a, bits = rd(1)
+            b, _ = rd(2)
+            body.append(f"uint64_t s = {a}, k = {b}, r = 0, bit = 1;")
+            if m == "pdep":
+                body.append("for (; k; k &= k - 1) { if (s & bit) r |= k & (0 - k); bit <<= 1; }")
+            else:
+                body.append("for (; k; k &= k - 1) { if (s & k & (0 - k)) r |= bit; bit <<= 1; }")
+            body.append(wr(0, "r"))
+        elif m == "mulx":
+            a, bits = rd(2)
+            src = "(c->r[RDX] & 0xffffffffull)" if bits == 32 else "c->r[RDX]"
+            body.append(f"unsigned __int128 p = (unsigned __int128){src} * ({a});")
+            body.append(wr(1, f"(uint64_t)p & {hx(mask(bits))}"))
+            body.append(wr(0, f"(uint64_t)(p >> {bits}) & {hx(mask(bits))}"))
+        elif m == "movbe":
+            v, bits = rd(1)
+            body.append(wr(0, f"__builtin_bswap{bits}({v})" if bits > 8 else v))
         elif m == "bswap":
             a, bits = rd(0)
             body.append(wr(0, f"__builtin_bswap{bits}({a})"))
