@@ -243,7 +243,7 @@ void CounterSync::Tick(const std::string& scene, std::uint8_t self, std::uint64_
         // Pause by pause, when our wait is known and a leader sends its waits: the lowest number, the same in
         // every game (review: counts compared at different times could leave every game thinking it leads).
         if (n.wait_known) {
-            const std::uint8_t leader = Leader(n, self);
+            const std::uint8_t leader = Leader(n, self, server_us);
             if (leader != 0) {
                 if (leader != self) {
                     AlignPause(n, s, leader, server_us, probe_only, out);
@@ -290,7 +290,7 @@ void CounterSync::Tick(const std::string& scene, std::uint8_t self, std::uint64_
         if (target < 0.0f) {
             target = s.remaining + (static_cast<float>(period) / 1e6f - gap) * kFramesPerSecond;
         }
-        WritePause(n, s, target, gap, best_player, "", probe_only, out);
+        WritePause(n, s, target, gap, best_player, "", server_us, probe_only, out);
     }
     std::erase_if(nodes_, [&](const auto& p) { return !here.contains(p.first); });
     struct Tick {
@@ -309,7 +309,7 @@ void CounterSync::Tick(const std::string& scene, std::uint8_t self, std::uint64_
         return true;
     };
     for (auto& [address, n] : nodes_) {
-        const bool started = std::exchange(n.started_now, false);
+        const bool started = n.started_now;
         if (!Shared(n) || per_key[n.key] != 1) {
             continue;
         }
@@ -332,6 +332,11 @@ void CounterSync::Tick(const std::string& scene, std::uint8_t self, std::uint64_
         return;
     }
     last_send_us_ = server_us;
+    // Our starts are in this message. One the kMinSendGapUs floor held back stays marked until a message goes
+    // (review: cleared on a skipped send, a start waited for the 3 s send, and a follower's hold waits on it).
+    for (auto& [address, n] : nodes_) {
+        n.started_now = false;
+    }
     // As many messages as it takes, kMaxPlatformCounters entries each (review: at 3 per node the cap filled at
     // about 10 nodes, and the same nodes always missed out).
     for (std::size_t from = 0; from < ticks.size(); from += coop::protocol::kMaxPlatformCounters) {
@@ -351,12 +356,19 @@ bool CounterSync::Shared(const Node& n) {
     return n.looping || n.starts >= kPauseStarts;
 }
 
-std::uint8_t CounterSync::Leader(const Node& n, std::uint8_t self) const {
+bool CounterSync::Starting(const Theirs& th, std::uint64_t server_us) {
+    return th.start_us != 0 && th.period_us != 0 &&
+           server_us <= th.start_us + static_cast<std::uint64_t>(kDueTimes * static_cast<double>(th.period_us));
+}
+
+std::uint8_t CounterSync::Leader(const Node& n, std::uint8_t self, std::uint64_t server_us) const {
     std::uint8_t lowest = 0;
     for (const std::uint64_t key : {WaitKey(n.key, 0), WaitKey(n.key, 1)}) {
         if (const auto tk = theirs_.find(key); tk != theirs_.end()) {
             for (const auto& [player, th] : tk->second) {
-                if (player != self && th.start_us != 0 && (lowest == 0 || player < lowest)) {
+                // Only a game whose lift still starts: one that keeps sending the same old start (its pause
+                // menu, a lift that stopped) would hold every other game's pauses (review).
+                if (player != self && Starting(th, server_us) && (lowest == 0 || player < lowest)) {
                     lowest = player;
                 }
             }
@@ -377,10 +389,13 @@ bool CounterSync::AlignPause(Node& n, const Seen& s, std::uint8_t leader, std::u
     const auto it = tk == theirs_.end() ? std::map<std::uint8_t, Theirs>::const_iterator{}
                                         : tk->second.find(leader);
     const Theirs* th = tk == theirs_.end() || it == tk->second.end() ? nullptr : &it->second;
+    if (th == nullptr || th->start_us == 0 || th->period_us == 0) {
+        return false;  // the leader sends no period for this wait: nothing to line up on, nothing held (review)
+    }
     const auto pause_us = static_cast<std::uint64_t>(static_cast<double>(s.duration) / kFramesPerSecond * 1e6);
     // The leader's start of this same pause: no older than one pause before ours. Then ours ends when the
     // leader's does, from that actual start (review: a guess from its last period is off by seconds).
-    if (th != nullptr && th->start_us != 0 && th->start_us + pause_us >= n.start_us) {
+    if (th->start_us + pause_us >= n.start_us) {
         n.aligned_start_us = n.start_us;
         const auto end_us = static_cast<std::int64_t>(th->start_us + pause_us);
         const float gap = static_cast<float>(
@@ -391,12 +406,17 @@ bool CounterSync::AlignPause(Node& n, const Seen& s, std::uint8_t leader, std::u
             return false;  // in step: nothing to write
         }
         WritePause(n, s, target, gap, leader, n.wait == 0 ? " (this pause, home wait)" : " (this pause, far wait)",
-                   probe_only, out);
+                   server_us, probe_only, out);
+        n.aligned_start_us = n.start_us;  // (the write moved it)
         return true;
     }
     // Not come yet: we began first, or the leader is more than a pause ahead (its next start of this wait is
-    // most of a period away). Held from running out until it comes, at most kMaxHoldUs.
-    if (server_us > n.start_us + kMaxHoldUs) {
+    // most of a period away). Held from running out until it comes: no later than its last start, kDueSlack of
+    // its period and a pause (review: a flat 60 s held every follower when the leader's lift stopped), and
+    // never more than kMaxHoldUs. This only bounds the hold; the write is placed from the start that comes.
+    const std::uint64_t due_us =
+        th->start_us + static_cast<std::uint64_t>(kDueSlack * static_cast<double>(th->period_us)) + pause_us;
+    if (server_us > due_us || server_us > n.start_us + kMaxHoldUs) {
         n.aligned_start_us = n.start_us;  // given up: it runs out as the game has it
         return false;
     }
@@ -417,15 +437,18 @@ bool CounterSync::AlignPause(Node& n, const Seen& s, std::uint8_t leader, std::u
 }
 
 void CounterSync::WritePause(Node& n, const Seen& s, float target, float gap, std::uint8_t leader, const char* how,
-                             bool probe_only, Out& out) {
+                             std::uint64_t server_us, bool probe_only, Out& out) {
     if (probe_only) {
         n.written_start_us = n.start_us;  // said once a pause; nothing changes
     } else {
         out.writes.push_back({s.node, n.key, target, s.remaining});
         ++writes_;
-        // The pause now ends as if it began this much earlier (negative: later): every start we send moves.
-        const auto shift =
-            static_cast<std::int64_t>(static_cast<double>(s.remaining - target) / kFramesPerSecond * 1e6);
+        // The pause now ends as if it began (its length - target) frames ago: every start we send moves there.
+        // From the length, not from the frames left (review: after a hold the frames left are the 10-20 the hold
+        // kept, and a shift from them left the starts early by the hold's time).
+        const auto began = static_cast<std::int64_t>(server_us) -
+                           static_cast<std::int64_t>(static_cast<double>(s.duration - target) / kFramesPerSecond * 1e6);
+        const std::int64_t shift = static_cast<std::int64_t>(n.start_us) - began;
         const auto move = [shift](std::uint64_t& t) {
             if (t != 0) {
                 t = static_cast<std::uint64_t>(static_cast<std::int64_t>(t) - shift);

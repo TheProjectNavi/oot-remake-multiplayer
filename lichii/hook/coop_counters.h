@@ -36,7 +36,9 @@
 //   them. So:
 //   - Pause by pause (AlignPause), when our wait is known: the leader is the
 //     lowest player number of the games that send this counter's waits (the
-//     same choice in every game, whatever their counts). A counter with no
+//     same choice in every game, whatever their counts) and still start them:
+//     a game whose newest wait start is more than kDueTimes of its period old
+//     (its pause menu, a lift that stopped) is passed over. A counter with no
 //     wait known, or a game on an older module, keeps the period rule above.
 //   - Each wait on its own key: a pause starts at the lift's home wait (within
 //     kHomeM of its placement, CoopRoomObjects, the same in every game) or its
@@ -50,8 +52,10 @@
 //     wait does, from the leader's actual start, never a guess from its last
 //     period (a physics lift's period changes by seconds). When the leader's
 //     start of this pause has not come yet (we began first, or it is more
-//     than a pause ahead), our pause is held from running out until it comes
-//     (at most kMaxHoldUs), then ends with the leader's.
+//     than a pause ahead), our pause is held from running out until it comes,
+//     then ends with the leader's. Held only when the leader sends this wait
+//     with a period, and only until its start is overdue (its last start,
+//     kDueSlack periods and a pause; never more than kMaxHoldUs).
 //   - A mover the room table marks driven (a switch, a sensor, a rider:
 //     Seen::driven) is never sent or written: its own logic moves it.
 //
@@ -213,6 +217,8 @@ public:
     static constexpr std::uint64_t kMinSendGapUs = 250'000;     // a start sent at once: at most this often
     static constexpr std::uint64_t kMaxHoldUs = 60'000'000;     // a pause held for the leader's start: at most
     static constexpr float kKeepFrames = 10.0f;                 // a held pause is kept above this many frames
+    static constexpr double kDueSlack = 1.25;   // a hold ends this many of the leader's periods after its start
+    static constexpr double kDueTimes = 2.0;    // a game whose newest start is this many periods old: not a leader
 
     struct Write {
         std::uint64_t node = 0;
@@ -290,15 +296,17 @@ private:
 
     // A node whose pauses are shared: looping, or seen starting kPauseStarts times.
     static bool Shared(const Node& n);
+    // Another game's wait still starts: a period known, and its last start no more than kDueTimes periods ago.
+    static bool Starting(const Theirs& th, std::uint64_t server_us);
     // The game every game follows pause by pause: the lowest number of the games that send this node's
-    // waits, ourselves included (the same in every game).
-    std::uint8_t Leader(const Node& n, std::uint8_t self) const;
+    // waits and still start them (Starting), ourselves included (the same in every game).
+    std::uint8_t Leader(const Node& n, std::uint8_t self, std::uint64_t server_us) const;
     // This pause alone, lined up on the leader's same wait: true when written.
     bool AlignPause(Node& n, const Seen& s, std::uint8_t leader, std::uint64_t server_us, bool probe_only,
                     Out& out);
     // A write of `target` frames left for this pause, with its note.
     void WritePause(Node& n, const Seen& s, float target, float gap, std::uint8_t leader, const char* how,
-                    bool probe_only, Out& out);
+                    std::uint64_t server_us, bool probe_only, Out& out);
 
     std::string scene_;
     std::map<std::uint64_t, Node> nodes_;                               // by node address

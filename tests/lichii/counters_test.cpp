@@ -5,6 +5,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <deque>
+#include <functional>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -600,6 +603,8 @@ struct WaitLift {
     float remaining = 180.0f;
     double move_left = 0.0;
     bool driven = false;
+    bool frozen = false;             // its lift stopped (a pause menu): it still sends what it has
+    std::set<std::uint64_t> unsent;  // keys left out of what it sends
     std::uint64_t node = 0x2140001000;
     std::uint64_t graph = 0x2140000f00;
     CounterSync sync;
@@ -608,6 +613,9 @@ struct WaitLift {
     std::vector<std::pair<std::uint64_t, int>> pause_ends;  // server time, wait
 
     void Step(double dt, std::uint64_t now_us) {
+        if (frozen) {
+            return;
+        }
         if (remaining > 0.0f) {
             remaining -= static_cast<float>(dt * 60.0);
             if (remaining <= 0.0f) {
@@ -644,7 +652,9 @@ struct WaitLift {
         CounterSync::Out out;
         sync.Tick("DodongoCavern", self, time_us, {s}, false, out);
         for (auto& m : out.send) {
-            sent.push_back(std::get<proto::PlatformCounter>(m));
+            auto pc = std::get<proto::PlatformCounter>(m);
+            std::erase_if(pc.ticks, [&](const auto& t) { return unsent.contains(t.key); });
+            sent.push_back(std::move(pc));
         }
         for (const auto& w : out.writes) {
             remaining = w.remaining;
@@ -657,9 +667,12 @@ struct WaitLift {
     }
 };
 
-// Runs the lifts together for `seconds` at 60 frames a second, every message 80 ms late.
-void Run(const std::vector<WaitLift*>& lifts, std::uint64_t& time, double seconds) {
-    std::vector<std::pair<std::uint64_t, proto::PlatformCounter>> flight;
+using Flight = std::vector<std::pair<std::uint64_t, proto::PlatformCounter>>;
+
+// Runs the lifts together for `seconds` at 60 frames a second, every message 80 ms late. `on_send` sees each
+// message as it is sent; `flight` carries the messages still on their way from one call to the next.
+void Run(const std::vector<WaitLift*>& lifts, std::uint64_t& time, double seconds, Flight& flight,
+         const std::function<void(const proto::PlatformCounter&)>& on_send = {}) {
     for (int i = 0; i < static_cast<int>(seconds * 60.0); ++i) {
         time += 16'667;
         for (WaitLift* l : lifts) {
@@ -667,6 +680,9 @@ void Run(const std::vector<WaitLift*>& lifts, std::uint64_t& time, double second
             l->Tick(time);
             for (auto& m : l->sent) {
                 m.player_number = l->self;
+                if (on_send) {
+                    on_send(m);
+                }
                 flight.push_back({time + 80'000, m});
             }
             l->sent.clear();
@@ -684,6 +700,11 @@ void Run(const std::vector<WaitLift*>& lifts, std::uint64_t& time, double second
             }
         }
     }
+}
+
+void Run(const std::vector<WaitLift*>& lifts, std::uint64_t& time, double seconds) {
+    Flight flight;
+    Run(lifts, time, seconds, flight);
 }
 
 // Each of b's last `last` pause ends against a's nearest end of the same wait: the largest gap, in seconds.
@@ -923,4 +944,117 @@ TEST_CASE("counters: more entries than one message holds go in more messages, no
         entries += m.ticks.size();
     }
     CHECK(entries > proto::kMaxPlatformCounters);  // all of them went, in more than one message
+}
+
+TEST_CASE("counters: a leader whose lift stops starting does not hold the others' pauses (review)") {
+    WaitLift a;  // the leader
+    WaitLift b;
+    a.self = 1;
+    b.self = 2;
+    b.Advance(2.0);
+    std::uint64_t time = 0;
+    Flight flight;
+    Run({&a, &b}, time, 120.0, flight);
+    REQUIRE(WorstEndGap(a, b, 4) < 0.15);
+    // a's player opens the pause menu for 60 s: its lift stops, its game keeps sending the same old starts.
+    a.frozen = true;
+    const std::size_t before = b.pause_ends.size();
+    const std::uint64_t from = time;
+    Run({&a, &b}, time, 60.0, flight);
+    // A 21 s cycle: b's lift keeps going. The old flat 60 s hold let it finish at most one pause.
+    CHECK(b.pause_ends.size() - before >= 4);
+    std::uint64_t last = from;
+    for (std::size_t i = before; i < b.pause_ends.size(); ++i) {
+        // No pause held past the leader's due start: its last start, 1.25 periods and a pause (about 30 s).
+        CHECK(static_cast<double>(b.pause_ends[i].first - last) / 1e6 < 35.0);
+        last = b.pause_ends[i].first;
+    }
+    // a comes back: b follows it again.
+    a.frozen = false;
+    Run({&a, &b}, time, 200.0, flight);
+    CHECK(WorstEndGap(a, b, 4) < 0.15);
+}
+
+TEST_CASE("counters: a leader that sends only its far wait never holds the home pause (review)") {
+    WaitLift a;  // the leader: its slider rests a bit more than 0.5 m off, so it never sends the home wait
+    WaitLift b;
+    a.self = 1;
+    b.self = 2;
+    a.unsent.insert(WaitKey(KeyOf(kHash, a.pause, a.node, a.graph), 0));
+    b.moves = {7.5, 8.6};
+    b.Advance(6.0);
+    std::uint64_t time = 0;
+    Run({&a, &b}, time, 300.0);
+    CHECK_FALSE(b.Said("start (home wait)"));  // never held for a home start that never comes
+    // Every home pause of b's ran its own length: never held.
+    for (std::size_t i = 1; i < b.pause_ends.size(); ++i) {
+        CHECK(static_cast<double>(b.pause_ends[i].first - b.pause_ends[i - 1].first) / 1e6 < 20.0);
+    }
+    CHECK(b.Said("(this pause, far wait)"));  // the far wait is still lined up
+}
+
+TEST_CASE("counters: after a hold the starts a follower sends are the leader's, not early by the hold (review)") {
+    WaitLift a;
+    WaitLift b;
+    a.self = 1;
+    b.self = 2;
+    b.Advance(8.0);  // b more than a pause ahead: its pause is held for a's start
+    const std::uint64_t key = KeyOf(kHash, a.pause, a.node, a.graph);
+    std::map<std::uint64_t, std::uint64_t> a_starts;  // wait key -> a's last sent start
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> b_after;  // b's sent wait starts, a's at the time
+    std::uint64_t time = 0;
+    Flight flight;
+    bool held = false;
+    std::size_t writes_at_hold = 0;  // (a period-rule write may come first)
+    for (int i = 0; i < 60 * 120 && b_after.size() < 4; ++i) {
+        Run({&a, &b}, time, 1.0 / 60.0 + 1e-9, flight, [&](const proto::PlatformCounter& m) {
+            for (const auto& t : m.ticks) {
+                if (t.key != WaitKey(key, 0) && t.key != WaitKey(key, 1)) {
+                    continue;
+                }
+                const std::uint64_t start = m.server_time_us - t.since_us;
+                if (m.player_number == 1) {
+                    a_starts[t.key] = start;
+                } else if (held && b.sync.Writes() > writes_at_hold && t.key == WaitKey(key, b.wait) &&
+                           a_starts.contains(t.key)) {
+                    b_after.push_back({start, a_starts[t.key]});  // the pause the hold ended
+                }
+            }
+        });
+        if (!held && b.Said("held for player 1")) {
+            held = true;
+            writes_at_hold = b.sync.Writes();
+        }
+    }
+    REQUIRE(held);
+    REQUIRE_FALSE(b_after.empty());
+    for (const auto& [ours, theirs] : b_after) {
+        CHECK(std::fabs(static_cast<double>(ours) - static_cast<double>(theirs)) / 1e6 < 0.15);
+    }
+}
+
+TEST_CASE("counters: a start the 250 ms floor held back goes in the next message, not the 3 s one (review)") {
+    WaitLift a;
+    a.self = 1;
+    a.pause = 6.0f;  // 0.1 s pauses, 0.1 s moves: a start every 0.2 s, inside the 250 ms floor
+    a.remaining = 6.0f;
+    a.moves = {0.1};
+    std::uint64_t time = 0;
+    std::uint64_t last_send = 0;
+    std::uint64_t worst_gap = 0;
+    for (int i = 0; i < 60 * 10; ++i) {
+        time += 16'667;
+        a.Step(1.0 / 60.0, time);
+        a.Tick(time);
+        if (!a.sent.empty()) {
+            if (last_send != 0) {
+                worst_gap = std::max(worst_gap, time - last_send);
+            }
+            last_send = time;
+        }
+        a.sent.clear();
+    }
+    // Every message follows the last within the floor and a frame or two. Cleared on a skipped send, every
+    // second start was lost and the messages came 0.4 s apart.
+    CHECK(worst_gap < 320'000);
 }

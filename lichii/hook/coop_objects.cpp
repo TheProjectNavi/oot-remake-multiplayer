@@ -2609,7 +2609,13 @@ private:
     }
     std::string life_scene_;
     // Each counter node's placement in the room table, found once a scene (Counters).
-    std::unordered_map<u64, const CoopRoomObjects::Placement*> counter_places_;
+    // A counter node's placement, kept with the actor it was found for (review: a node address the heap gives to
+    // another actor in the same scene must not keep the old placement). Erased with its counter_nodes_ entry.
+    struct CounterPlace {
+        u64 actor = 0;
+        const CoopRoomObjects::Placement* place = nullptr;
+    };
+    std::unordered_map<u64, CounterPlace> counter_places_;
     bool life_table_full_said_ = false;
     static constexpr std::size_t kStepHitsKept = 4096;
     static constexpr u64 kGivenWaitUs = 250'000;
@@ -2639,6 +2645,7 @@ private:
                 box.asked = false;
                 box.allocating = false;
                 counter_nodes_.clear();
+                counter_places_.clear();
                 counter_others_.Clear();
                 ring_count_seen_ = 0;
 #ifdef COOP_HOOKSHOT
@@ -2721,6 +2728,7 @@ private:
             const u64 actor = actor_of(node, &graph);
             const auto known = actor ? names_.find(actor) : names_.end();
             if (known == names_.end()) {
+                counter_places_.erase(node);
                 it = counter_nodes_.erase(it);  // gone, reused, or its actor left the walk
                 continue;
             }
@@ -2728,6 +2736,7 @@ private:
                 // An enemy's, an NPC's, Link's: not read again while it is
                 // that actor's (CoopCounters::OtherNodes).
                 counter_others_.Add(node, actor);
+                counter_places_.erase(node);
                 it = counter_nodes_.erase(it);
                 continue;
             }
@@ -2747,8 +2756,10 @@ private:
             for (std::size_t i = 0; i < 3; ++i) {
                 at[i] = r.Get<float>(actor + kActorPosition + 4 * i).value_or(0.0f);
             }
-            auto [placed, fresh_node] = counter_places_.try_emplace(node, nullptr);
-            if (fresh_node) {
+            // Found again when the node is new, now another actor's, or its placement is of another name.
+            CounterPlace& placed = counter_places_[node];
+            if (placed.actor != actor || (placed.place != nullptr && placed.place->name != s.owner_name)) {
+                placed = CounterPlace{actor, nullptr};
                 float best = 0.0f;
                 for (const CoopRoomObjects::Placement& p : CoopRoomObjects::Placements()) {
                     if (p.scene != scene || p.name != s.owner_name) {
@@ -2756,13 +2767,13 @@ private:
                     }
                     const float dx = at[0] - p.place[0];
                     const float dz = at[2] - p.place[2];
-                    if (placed->second == nullptr || dx * dx + dz * dz < best) {
-                        placed->second = &p;
+                    if (placed.place == nullptr || dx * dx + dz * dz < best) {
+                        placed.place = &p;
                         best = dx * dx + dz * dz;
                     }
                 }
             }
-            if (const CoopRoomObjects::Placement* p = placed->second) {
+            if (const CoopRoomObjects::Placement* p = placed.place) {
                 float d2 = 0.0f;
                 for (std::size_t i = 0; i < 3; ++i) {
                     d2 += (at[i] - p->place[i]) * (at[i] - p->place[i]);
