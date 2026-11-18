@@ -160,8 +160,8 @@ def cmd_build(args):
     sources.append(os.path.join(RUNTIME_DIR, "recomp_runtime.c"))
     system_dir = os.path.join(RUNTIME_DIR, "system")
     sources += sorted(os.path.join(system_dir, n) for n in os.listdir(system_dir) if n.endswith(".c"))
-    cmd = [cc, f"-O{args.opt}", "-w", "-fwrapv", "-I", RUNTIME_DIR, "-I", args.dir,
-           *sources, "-o", args.output]
+    cmd = [cc, f"-O{args.opt}", "-w", "-fwrapv", "-ffp-contract=off", "-I", RUNTIME_DIR, "-I", args.dir,
+           *sources, "-lm", "-o", args.output]
     print(" ".join(cmd))
     return subprocess.run(cmd).returncode
 

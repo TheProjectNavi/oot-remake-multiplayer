@@ -11,9 +11,18 @@
 
 enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15 };
 
+/* One 128-bit SSE register, seen as lanes of any type. */
+typedef union {
+    uint8_t b[16]; uint16_t w[8]; uint32_t d[4]; uint64_t q[2];
+    int8_t sb[16]; int16_t sw[8]; int32_t sd[4]; int64_t sq[2];
+    float f[4]; double g[2];
+} Xmm;
+
 typedef struct {
     uint64_t r[16];
+    Xmm x[16];
     uint64_t fs_base, gs_base;
+    uint32_t mxcsr;
     uint8_t cf, zf, sf, of, pf, df;
 } Ctx;
 
@@ -65,6 +74,35 @@ static inline void WR8 (uint64_t a, uint64_t v) { recomp_mem[a] = (uint8_t)v; }
 static inline void WR16(uint64_t a, uint64_t v) { uint16_t x = (uint16_t)v; memcpy(recomp_mem + a, &x, 2); }
 static inline void WR32(uint64_t a, uint64_t v) { uint32_t x = (uint32_t)v; memcpy(recomp_mem + a, &x, 4); }
 static inline void WR64(uint64_t a, uint64_t v) { memcpy(recomp_mem + a, &v, 8); }
+
+static inline Xmm XRD(uint64_t a) { Xmm v; memcpy(&v, recomp_mem + a, 16); return v; }
+static inline void XWR(uint64_t a, Xmm v) { memcpy(recomp_mem + a, &v, 16); }
+static inline Xmm XZERO(void) { Xmm v; memset(&v, 0, sizeof v); return v; }
+
+static inline float F32(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
+static inline double F64(uint64_t u) { double f; memcpy(&f, &u, 8); return f; }
+
+/* Float to integer as the CPU does it: out of range or NaN gives the
+ * "integer indefinite" value (only the sign bit set). */
+static inline uint64_t CVT_I32(double v) {
+    if (!(v > -2147483649.0 && v < 2147483648.0)) return 0x80000000u;
+    return (uint32_t)(int32_t)v;
+}
+static inline uint64_t CVT_I64(double v) {
+    if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) return 0x8000000000000000ull;
+    return (uint64_t)(int64_t)v;
+}
+/* Round to nearest even (the default MXCSR rounding). */
+static inline double RNE(double v) { return __builtin_nearbyint(v); }
+
+/* COMISS/UCOMISS/COMISD/UCOMISD. */
+static inline void F_UCOMI(Ctx *c, double a, double b) {
+    c->of = c->sf = 0;
+    if (a != a || b != b) { c->zf = c->pf = c->cf = 1; return; }
+    c->pf = 0;
+    c->zf = a == b;
+    c->cf = a < b;
+}
 
 static inline void PUSH(Ctx *c, uint64_t v) { c->r[RSP] -= 8; WR64(c->r[RSP], v); }
 static inline uint64_t POP(Ctx *c) { uint64_t v = RD64(c->r[RSP]); c->r[RSP] += 8; return v; }

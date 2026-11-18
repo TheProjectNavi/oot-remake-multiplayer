@@ -23,11 +23,11 @@ sys.path.insert(0, TOOL)
 
 import elfparse  # noqa: E402
 
-PROGRAMS = ["hello", "arith", "sort", "switch", "bits"]
+PROGRAMS = ["hello", "arith", "sort", "switch", "bits", "floats"]
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3", "-Os"]
 COMPILERS = [c for c in ("gcc", "clang") if shutil.which(c)]
-FLAGS = ["-static", "-nostdlib", "-fno-pie", "-fno-stack-protector", "-fcf-protection=none",
-         "-mgeneral-regs-only", "-fno-builtin", "-fno-asynchronous-unwind-tables"]
+FLAGS = ["-static", "-nostdlib", "-fno-pie", "-no-pie", "-fno-stack-protector", "-fcf-protection=none",
+         "-fno-builtin", "-fno-asynchronous-unwind-tables"]
 
 try:
     import capstone  # noqa: F401
@@ -162,7 +162,7 @@ class SystemLibraryTest(unittest.TestCase):
     def build(self, prog, cc, opt, extra=()):
         tag = f"{prog}-{cc}{opt}{''.join(extra)}"
         exe = os.path.join(self.tmp, tag)
-        flags = [f for f in FLAGS if f != "-static"] + ["-no-pie"]
+        flags = [f for f in FLAGS if f != "-static"]
         r = run([cc, opt, *flags, *extra, os.path.join(SYSDEMO, prog + ".c"),
                  "-L", self.tmp, "-lp4tp_sys", f"-Wl,-rpath,{self.tmp}", "-lgcc", "-o", exe])
         self.assertEqual(r.returncode, 0, r.stderr.decode())

@@ -17,6 +17,7 @@ import capstone
 from capstone import x86_const as X
 
 from elfparse import Elf
+from sse import SSE, NotSSE
 
 REG64 = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
          "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
@@ -270,6 +271,7 @@ class Translator:
     def __init__(self, funcs):
         self.funcs = {f.addr: f for f in funcs}
         self.unsupported = {}
+        self.sse = SSE(self)
 
     # ---- operands ----
     def reg_read(self, reg_id, insn):
@@ -392,6 +394,14 @@ class Translator:
 
         if m in IGNORED:
             return []
+
+        try:
+            vec = self.sse.translate(fn, insn, m, ops, pre)
+        except NotSSE as e:
+            raise Unsupported(str(e))
+        if vec is not None:
+            lines = pre.lines + vec
+            return ["{ " + " ".join(lines) + " }"] if lines else []
 
         def rd(i):
             return self.read(ops[i], insn, pre)
