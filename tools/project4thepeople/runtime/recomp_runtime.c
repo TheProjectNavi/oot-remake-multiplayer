@@ -191,6 +191,8 @@ int main(int argc, char **argv) {
         memcpy(recomp_mem + s->vaddr, s->bytes, s->filesz);
     }
 
+    for (uint64_t i = 0; i < recomp_fixup_count; i++)
+        WR64(recomp_fixups[i].addr, recomp_fixups[i].value);
     bind_imports();
 
     /* Start-up stack as Linux builds it: argc, argv[], NULL, envp NULL, auxv AT_NULL. */

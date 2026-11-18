@@ -7,13 +7,16 @@ It is an early tool for learning and research. What it does today:
 - Reads plain ELF files: segments, sections, symbols. It names PlayStation file types and segments, and refuses signed or encrypted files (a SELF). **It never decrypts anything.** Notes on PS5 files: [PS5.md](PS5.md).
 - Finds the functions: from symbols when the file has them; otherwise by following calls and jumps from the entry point, plus code addresses found in data (function pointer tables) and `switch` jump tables.
 - Translates the integer part of x86-64: moves, arithmetic and logic at every width with the CPU flags, multiply and divide, shifts and rotates, bit scans, conditional moves and sets, `rep movs`/`stos`, calls, returns, direct and indirect jumps, `syscall`.
+- Translates SSE and SSE2 (the x86-64 baseline, `sse.py`): float and double maths, compares, conversions, and the integer vector instructions compilers use for copies and vectorised loops.
+- Programs that can load at any address (PIE, and PlayStation programs): they are placed at 0x1000000 and their `R_X86_64_RELATIVE` relocations applied.
+- PlayStation programs (`sce.py`): reads the `PT_SCE_DYNLIBDATA` tables (needed modules, import libraries, symbols, relocations) and names each import from its NID ([below](#playstation-programs)).
 - Reads the program's imports (the functions it takes from system libraries) and connects each one to a PC version written in C ([below](#system-functions)). An import with no PC version yet is reported by name.
 - Runs the result with a small runtime (`runtime/`): 4 GiB of guest memory, the program's segments copied in, a start-up stack, calls by address, and a few Linux system calls (`read`, `write`, `exit`, `brk`).
 
 What it does not do yet:
 
-- Floating point and vector instructions (SSE, AVX, x87). They become a `recomp_fail` call: the output builds, and stops with a message if one is reached. `recomp` lists how many there are.
-- Relocating a program that can load at any address (PIE), threads, signals, exceptions, self-modifying code.
+- AVX, AVX2 and x87 instructions (PS5 games use AVX2). They become a `recomp_fail` call: the output builds, and stops with a message if one is reached. `recomp` lists how many there are.
+- Threads, signals, exceptions, thread-local storage, self-modifying code.
 - PC versions of any real console library. Only the made-up test library has them. For a PlayStation program this is the main work: see [PS5.md](PS5.md).
 
 ## Use
@@ -58,6 +61,18 @@ To add a library: write a new file in `runtime/system/` with its table, and add 
 
 The tests use a made-up "console library" (`tests/sysdemo/p4tp_sys.h`: text, files, memory, a controller, a clock) and a small game that only talks to the outside through it. The original game runs with the library; the recompiled game runs with the PC versions; the output must be the same.
 
+## PlayStation programs
+
+A decrypted PlayStation program (PS4, and as far as is known PS5) keeps its imports in the `PT_SCE_DYNLIBDATA` segment, and names each imported function by its **NID**: an 11-character hash of the real name (SHA-1 of the name and a fixed 16-byte salt). `sce.py` reads these tables and computes NIDs, so an import can be matched to its PC version by name:
+
+- `info` lists the needed modules, the import libraries and every imported NID, with its name when it is known.
+- A name is known when a PC version in `runtime/system/` has it, or when it is in a file given with `--names` (one symbol name per line). An unknown import is called `NID:<nid>`.
+- `recomp` connects the imports to PC versions exactly as for a Linux program.
+
+The layout and the NID hash follow the open-source PS4 emulator shadPS4 (facts only, no code copied); the NID hash gives the same IDs that appear in public PS4 homebrew code (`__stack_chk_fail` is `Ou3iL1abvng`). None of it has been checked on a PS5 file.
+
+The test helper `tests/make_sce.py` rewrites one of **our own** test programs in this layout (Sony file type, `DT_SCE_*` tags, NID-named imports, no sections). The tests run it through `info`, `recomp` and `build`, and the result must behave like the original.
+
 ## How the C looks
 
 ```c
@@ -82,14 +97,15 @@ L_401003: /* call 0x401100 */
 python tools/project4thepeople/tests/test_project4thepeople.py -v
 ```
 
-The programs in `tests/programs/` are our own small C programs (arithmetic at every width, sorting with function pointers, a jump-table `switch`, CRC and bit tricks). Each is built with gcc and clang at `-O0` to `-Os`, with and without symbols, run, recompiled, run again, and the two runs must print the same text and return the same exit code. All 100 runs pass.
+The programs in `tests/programs/` are our own small C programs (arithmetic at every width, sorting with function pointers, a jump-table `switch`, CRC and bit tricks). Each is built with gcc and clang at `-O0` to `-Os`, with and without symbols, run, recompiled, run again, and the two runs must print the same text and return the same exit code. All of them pass.
 
-The system function tests build the game in `tests/sysdemo/` with gcc and clang at `-O0`, `-O2` and `-Os`: normal, stripped, and with `-fno-plt` (imports called straight through the GOT). All 18 match. Another test calls an import with no PC version and checks the report and `P4TP_STRICT`. The ELF reader has its own tests, including a PlayStation-typed header and refusing signed files. The tests are not in CI yet.
+Every test program is also built position-independent (with and without symbols), and `floats.c` checks float and double maths bit for bit.
+
+The system function tests build the game in `tests/sysdemo/` with gcc and clang at `-O0`, `-O2` and `-Os`: normal, stripped, `-fno-plt` (imports called straight through the GOT), and position-independent. All 30 match. The same game rewritten in the PlayStation layout matches too, and an import without a known name is reported by its NID. Another test calls an import with no PC version and checks the report and `P4TP_STRICT`. The ELF reader has its own tests, including a PlayStation-typed header and refusing signed files. The tests are not in CI yet.
 
 ## Next steps
 
-1. SSE2 scalar and vector instructions (every real program uses them for floating point and copies).
-2. Programs that load at any address (PIE) and their `R_X86_64_RELATIVE` relocations.
-3. Reading PlayStation imports (`PT_SCE_DYNLIBDATA`, NIDs), so `info` can list what a game would need.
-4. A way to replace any function by hand-written C (how recompiled ports patch and extend the game).
-5. A Windows runtime.
+1. AVX and AVX2 (256-bit registers): PS5 programs are built for a CPU that has them.
+2. Thread-local storage (`fs` base set up per thread) and threads.
+3. A way to replace any function by hand-written C (how recompiled ports patch and extend the game).
+4. A Windows runtime.

@@ -53,6 +53,10 @@ extern const char *const recomp_import_names[];
 extern const uint64_t recomp_import_count;
 extern const RecompImportSlot recomp_import_slots[];
 extern const uint64_t recomp_import_slot_count;
+/* Pointers to write at start that are not in the file bytes. */
+typedef struct { uint64_t addr, value; } RecompFixup;
+extern const RecompFixup recomp_fixups[];
+extern const uint64_t recomp_fixup_count;
 extern const RecompFnEntry recomp_functions[];
 extern const uint64_t recomp_function_count;
 extern const RecompSegment recomp_segments[];

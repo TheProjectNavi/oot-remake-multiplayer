@@ -28,6 +28,9 @@ ET_NAMES = {
 SCE_TYPES = {0xFE00, 0xFE04, 0xFE0C, 0xFE10, 0xFE18}
 
 PT_NULL, PT_LOAD, PT_DYNAMIC, PT_INTERP, PT_NOTE, PT_TLS = 0, 1, 2, 3, 4, 7
+ET_DYN = 3
+# Where a program that can load anywhere is placed in guest memory.
+DEFAULT_BASE = 0x1000000
 PT_NAMES = {
     0: "PT_NULL", 1: "PT_LOAD", 2: "PT_DYNAMIC", 3: "PT_INTERP", 4: "PT_NOTE",
     5: "PT_SHLIB", 6: "PT_PHDR", 7: "PT_TLS",
@@ -101,6 +104,8 @@ class Reloc:
     type: int
     symbol: str      # name of the symbol, "" for none
     addend: int
+    sym_value: int = 0       # the symbol's address when the program defines it
+    sym_defined: bool = False
 
     @property
     def type_name(self):
@@ -126,6 +131,9 @@ class Elf:
     symbols: list = field(default_factory=list)
     relocs: list = field(default_factory=list)
     needed: list = field(default_factory=list)   # libraries named in the dynamic section
+    base: int = 0             # load address added to every address (programs that load anywhere)
+    fixups: list = field(default_factory=list)   # (address, value) to write at start, outside the file bytes
+    sce: object = None        # sce.SceInfo for a PlayStation program with dynamic tables
 
     @property
     def type_name(self):
@@ -162,7 +170,8 @@ class Elf:
         """Imported symbols and the slots that hold their addresses, by name."""
         out = {}
         for r in self.relocs:
-            if r.type in (R_X86_64_JUMP_SLOT, R_X86_64_GLOB_DAT, R_X86_64_64) and r.symbol:
+            if r.type in (R_X86_64_JUMP_SLOT, R_X86_64_GLOB_DAT, R_X86_64_64) and r.symbol \
+                    and not r.sym_defined:
                 imp = out.setdefault(r.symbol, Import(r.symbol, [], r.type == R_X86_64_JUMP_SLOT))
                 imp.slots.append((r.offset, r.addend if r.type == R_X86_64_64 else 0))
                 imp.is_function |= r.type == R_X86_64_JUMP_SLOT
@@ -189,7 +198,8 @@ def identify(data):
     return "unknown"
 
 
-def parse(data):
+def parse(data, nid_names=None):
+    """Read an ELF file. `nid_names` (NID -> name) names PlayStation imports."""
     data = bytes(data)
     kind = identify(data)
     if kind != "ELF":
@@ -252,8 +262,10 @@ def parse(data):
         for i in range(sec.size // sec.entsize):
             r_offset, r_info, r_addend = struct.unpack_from("<QQq", data, sec.offset + i * sec.entsize)
             si = r_info >> 32
-            name = syms[si].name if 0 < si < len(syms) else ""
-            elf.relocs.append(Reloc(r_offset, r_info & 0xFFFFFFFF, name, r_addend))
+            sym = syms[si] if 0 < si < len(syms) else None
+            elf.relocs.append(Reloc(r_offset, r_info & 0xFFFFFFFF, sym.name if sym else "", r_addend,
+                                    sym.value if sym else 0,
+                                    bool(sym and sym.shndx and sym.shndx < 0xFF00 and sym.value)))
 
     dyn = next((s for s in elf.sections if s.name == ".dynamic"), None)
     dynstr = next((s for s in elf.sections if s.name == ".dynstr"), None)
@@ -264,9 +276,63 @@ def parse(data):
                 break
             if tag == 1:  # DT_NEEDED
                 elf.needed.append(cstr(dynstr.offset, val))
+    if elf.is_playstation:
+        import sce
+        elf.sce = sce.read(elf)
+        if elf.sce:
+            sce.add_to_elf(elf, elf.sce, nid_names or {})
+
+    if e_type in (ET_DYN, 0xFE10, 0xFE18) and any(sg.loadable for sg in elf.segments):
+        lowest = min(sg.vaddr for sg in elf.segments if sg.loadable)
+        if lowest < DEFAULT_BASE:
+            rebase(elf, DEFAULT_BASE)
+    apply_relocations(elf)
     return elf
 
 
-def load(path):
+def rebase(elf, base):
+    """Move a program that can load anywhere to `base`: every address in the
+    headers, symbols and relocations gets `base` added."""
+    elf.base = base
+    elf.entry += base
+    for sg in elf.segments:
+        if sg.type != PT_NULL and (sg.vaddr or sg.loadable):
+            sg.vaddr += base
+    for sec in elf.sections:
+        if sec.addr:
+            sec.addr += base
+    for sym in elf.symbols:
+        if sym.shndx and sym.shndx < 0xFF00 and sym.value:
+            sym.value += base
+    for r in elf.relocs:
+        r.offset += base
+        if r.sym_defined:
+            r.sym_value += base
+
+
+def apply_relocations(elf):
+    """Fill the slots whose value is known before the program runs: RELATIVE
+    (base + addend) and absolute pointers to the program's own symbols.
+    Slots inside the file bytes are patched; others become fixups."""
+    data = bytearray(elf.data)
+    for r in elf.relocs:
+        if r.type == R_X86_64_RELATIVE:
+            value = elf.base + r.addend
+        elif r.type in (R_X86_64_64, R_X86_64_GLOB_DAT, R_X86_64_JUMP_SLOT) and r.sym_defined:
+            value = r.sym_value + (r.addend if r.type == R_X86_64_64 else 0)
+        else:
+            continue
+        value &= (1 << 64) - 1
+        for sg in elf.load_segments():
+            if sg.vaddr <= r.offset and r.offset + 8 <= sg.vaddr + sg.filesz:
+                off = sg.offset + r.offset - sg.vaddr
+                struct.pack_into("<Q", data, off, value)
+                break
+        else:
+            elf.fixups.append((r.offset, value))
+    elf.data = bytes(data)
+
+
+def load(path, nid_names=None):
     with open(path, "rb") as f:
-        return parse(f.read())
+        return parse(f.read(), nid_names)

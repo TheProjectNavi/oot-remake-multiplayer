@@ -34,10 +34,13 @@ def cmd_info(args):
             print("This file is signed and encrypted. This tool only reads plain ELF files "
                   "and does not decrypt.")
         return 1
-    elf = elfparse.parse(data)
+    names = nid_names(args.names)
+    elf = elfparse.parse(data, names)
     print(f"type:      {elf.type_name}" + ("  (PlayStation)" if elf.is_playstation else ""))
     print(f"machine:   {elf.machine}" + (" (x86-64)" if elf.machine == elfparse.EM_X86_64 else ""))
     print(f"entry:     {elf.entry:#x}")
+    if elf.base:
+        print(f"loads at:  {elf.base:#x} (the program can load anywhere; addresses below include this)")
     print("segments:")
     for s in elf.segments:
         fl = ("R" if s.flags & 4 else "-") + ("W" if s.flags & 2 else "-") + ("X" if s.flags & 1 else "-")
@@ -53,6 +56,11 @@ def cmd_info(args):
             state = "PC version" if imp.name in known else "no PC version yet"
             kind = "function" if imp.is_function else "value"
             print(f"  {imp.name:<32} {kind:<8} {state}")
+    if elf.sce:
+        import sce
+        print("PlayStation dynamic tables:")
+        for line in sce.describe(elf.sce, names):
+            print("  " + line)
     if elf.is_playstation:
         print("note:      PlayStation programs call system libraries (graphics, files, input) "
               "that are not in the file. See PS5.md.")
@@ -71,6 +79,18 @@ def system_function_names():
     return names
 
 
+def nid_names(names_file=None):
+    """NID -> name for every PC system function, plus the names in
+    `names_file` (one symbol name per line), so PlayStation imports can be
+    matched to PC versions by their real names."""
+    import sce
+    names = set(system_function_names())
+    if names_file:
+        with open(names_file, encoding="utf-8") as f:
+            names.update(line.strip() for line in f if line.strip() and not line.startswith("#"))
+    return {sce.nid(n): n for n in names}
+
+
 def c_bytes(data):
     out = []
     for i in range(0, len(data), 24):
@@ -81,7 +101,7 @@ def c_bytes(data):
 def cmd_recomp(args):
     import x86_to_c
 
-    elf = elfparse.load(args.elf)
+    elf = elfparse.load(args.elf, nid_names(args.names))
     if elf.machine != elfparse.EM_X86_64:
         print("only x86-64 programs are supported", file=sys.stderr)
         return 1
@@ -137,6 +157,11 @@ def cmd_recomp(args):
                 n_slots += 1
         f.write("    { 0, 0, 0 } };\n")
         f.write(f"const uint64_t recomp_import_slot_count = {n_slots};\n")
+        f.write("const RecompFixup recomp_fixups[] = {\n")
+        for addr, value in elf.fixups:
+            f.write(f"    {{ {addr:#x}ull, {value:#x}ull }},\n")
+        f.write("    { 0, 0 } };\n")
+        f.write(f"const uint64_t recomp_fixup_count = {len(elf.fixups)};\n")
 
     print(f"{len(funcs)} functions, {insn_count} instructions -> {args.output}")
     if imports:
@@ -171,9 +196,11 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("info", help="show what is in an ELF file")
     s.add_argument("elf")
+    s.add_argument("--names", help="file of symbol names, one per line, to name PlayStation imports")
     s.set_defaults(fn=cmd_info)
     s = sub.add_parser("recomp", help="write C source for an ELF program")
     s.add_argument("elf")
+    s.add_argument("--names", help="file of symbol names, one per line, to name PlayStation imports")
     s.add_argument("-o", "--output", required=True, help="folder for the C files")
     s.set_defaults(fn=cmd_recomp)
     s = sub.add_parser("build", help="compile the C source with the runtime")

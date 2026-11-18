@@ -22,6 +22,7 @@ TOOL = os.path.dirname(HERE)
 sys.path.insert(0, TOOL)
 
 import elfparse  # noqa: E402
+import sce  # noqa: E402
 
 PROGRAMS = ["hello", "arith", "sort", "switch", "bits", "floats"]
 OPT_LEVELS = ["-O0", "-O1", "-O2", "-O3", "-Os"]
@@ -36,6 +37,12 @@ except ImportError:
     HAVE_CAPSTONE = False
 
 CAN_RUN = platform.system() == "Linux" and platform.machine() in ("x86_64", "AMD64") and COMPILERS
+
+
+def pie_flags(flags):
+    """Position-independent and linked with the system's loader, which
+    applies the relocations when the original runs."""
+    return [f for f in flags if f not in ("-static", "-fno-pie", "-no-pie")] + ["-fpie", "-pie"]
 
 
 def run(cmd, **kw):
@@ -87,6 +94,20 @@ class ElfParseTest(unittest.TestCase):
         self.assertEqual(elf.read_vaddr(0x1002, 4), bytes(data[2:4]) + b"\0\0")
 
 
+class NidTest(unittest.TestCase):
+    def test_known_nids(self):
+        # These pairs appear in public PS4 homebrew code and emulator tables.
+        self.assertEqual(sce.nid("__stack_chk_fail"), "Ou3iL1abvng")
+        self.assertEqual(sce.nid("__stack_chk_guard"), "f7uOxY9mM1U")
+        self.assertEqual(sce.nid("sceKernelLoadStartModule"), "wzvqT4UqKX8")
+
+    def test_encode_id(self):
+        self.assertEqual(sce.encode_id(0), "A")
+        self.assertEqual(sce.encode_id(63), "-")
+        self.assertEqual(sce.encode_id(64), "BA")
+        self.assertEqual(sce.encode_id(0x1000), "BAA")
+
+
 @unittest.skipUnless(CAN_RUN and HAVE_CAPSTONE, "needs Linux x86-64, a C compiler and capstone")
 class RecompileTest(unittest.TestCase):
     @classmethod
@@ -97,12 +118,13 @@ class RecompileTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def check(self, cc, opt, prog, strip):
-        tag = f"{prog}-{cc}{opt}{'-s' if strip else ''}"
+    def check(self, cc, opt, prog, strip, pie=False):
+        tag = f"{prog}-{cc}{opt}{'-s' if strip else ''}{'-pie' if pie else ''}"
         exe = os.path.join(self.tmp, tag)
         src = os.path.join(HERE, "programs", prog + ".c")
         extra = ["-s"] if strip else []
-        r = run([cc, opt, *FLAGS, src, "-lgcc", *extra, "-o", exe])
+        flags = pie_flags(FLAGS) if pie else FLAGS
+        r = run([cc, opt, *flags, src, "-lgcc", *extra, "-o", exe])
         self.assertEqual(r.returncode, 0, r.stderr.decode())
         native = run([exe])
 
@@ -123,6 +145,16 @@ class RecompileTest(unittest.TestCase):
                 for prog in PROGRAMS:
                     with self.subTest(cc=cc, opt=opt, prog=prog):
                         self.check(cc, opt, prog, strip=False)
+
+    def test_load_anywhere(self):
+        """Position-independent programs (as console programs are): moved to a
+        base address, their RELATIVE relocations applied."""
+        for cc in COMPILERS:
+            for opt in ("-O0", "-O2", "-Os"):
+                for prog in PROGRAMS:
+                    for strip in (False, True):
+                        with self.subTest(cc=cc, opt=opt, prog=prog, strip=strip):
+                            self.check(cc, opt, prog, strip, pie=True)
 
     def test_stripped(self):
         """No symbols, as in a shipped program: functions are found by following code."""
@@ -163,6 +195,9 @@ class SystemLibraryTest(unittest.TestCase):
         tag = f"{prog}-{cc}{opt}{''.join(extra)}"
         exe = os.path.join(self.tmp, tag)
         flags = [f for f in FLAGS if f != "-static"]
+        if "-pie" in extra:
+            flags = pie_flags(FLAGS)
+            extra = [e for e in extra if e != "-pie"]
         r = run([cc, opt, *flags, *extra, os.path.join(SYSDEMO, prog + ".c"),
                  "-L", self.tmp, "-lp4tp_sys", f"-Wl,-rpath,{self.tmp}", "-lgcc", "-o", exe])
         self.assertEqual(r.returncode, 0, r.stderr.decode())
@@ -175,7 +210,7 @@ class SystemLibraryTest(unittest.TestCase):
         return exe, rexe
 
     def test_game_matches(self):
-        variants = [(), ("-s",), ("-fno-plt",)]
+        variants = [(), ("-s",), ("-fno-plt",), ("-pie",), ("-pie", "-s")]
         for cc in COMPILERS:
             for opt in ("-O0", "-O2", "-Os"):
                 for extra in variants:
@@ -199,6 +234,53 @@ class SystemLibraryTest(unittest.TestCase):
         r = run([rexe], cwd=self.tmp, env={**os.environ, "P4TP_STRICT": "1"})
         self.assertEqual(r.stdout, b"before\n")
         self.assertEqual(r.returncode, 126)
+
+    def test_playstation_layout(self):
+        """Our own game rewritten in the PlayStation layout (tests/make_sce.py):
+        imports found by NID, matched to PC versions by name, same output."""
+        sys.path.insert(0, HERE)
+        import make_sce
+        for cc in COMPILERS:
+            for opt in ("-O0", "-O2"):
+                with self.subTest(cc=cc, opt=opt):
+                    exe, _ = self.build("game", cc, opt, ("-pie",))
+                    ps = exe + ".sce"
+                    make_sce.convert(exe, ps)
+                    tool = os.path.join(TOOL, "project4thepeople.py")
+                    info = run([sys.executable, tool, "info", ps]).stdout.decode()
+                    self.assertIn("ET_SCE_DYNEXEC", info)
+                    self.assertIn("imported symbols: 8, 8 with a known name", info)
+                    self.assertIn(f"{sce.nid('sys_print')}  sys_print", info)
+                    out = ps + ".c"
+                    self.assertEqual(run([sys.executable, tool, "recomp", ps, "-o", out]).returncode, 0)
+                    r = run([sys.executable, tool, "build", out, "-o", ps + ".recomp"])
+                    self.assertEqual(r.returncode, 0, r.stderr.decode())
+                    native = run([exe], cwd=self.tmp)
+                    recomp = run([ps + ".recomp"], cwd=self.tmp)
+                    self.assertEqual(recomp.stderr, b"")
+                    self.assertEqual(native.stdout, recomp.stdout)
+                    self.assertEqual(native.returncode, recomp.returncode)
+
+    def test_playstation_unknown_import(self):
+        """An import whose name is not known shows as its NID; --names names it."""
+        sys.path.insert(0, HERE)
+        import make_sce
+        exe, _ = self.build("extra", COMPILERS[0], "-O2", ("-pie",))
+        ps = exe + ".sce"
+        make_sce.convert(exe, ps)
+        tool = os.path.join(TOOL, "project4thepeople.py")
+        out = ps + ".c"
+        run([sys.executable, tool, "recomp", ps, "-o", out])
+        run([sys.executable, tool, "build", out, "-o", ps + ".recomp"])
+        r = run([ps + ".recomp"], cwd=self.tmp)
+        self.assertEqual(r.stderr.decode(),
+                         f"project4thepeople: missing system function: NID:{sce.nid('sys_extra')}\n")
+        names = os.path.join(self.tmp, "names.txt")
+        with open(names, "w") as f:
+            f.write("# names to try\nsys_extra\n")
+        info = run([sys.executable, tool, "info", ps, "--names", names]).stdout.decode()
+        self.assertIn(f"{sce.nid('sys_extra')}  sys_extra", info)
+        self.assertRegex(info, r"sys_extra\s+function\s+no PC version yet")
 
     def test_info_lists_imports(self):
         exe, _ = self.build("extra", COMPILERS[0], "-O2")

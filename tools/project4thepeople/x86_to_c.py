@@ -152,7 +152,8 @@ def jump_table(elf: Elf, trail, jmp):
     Two shapes are known:
       jmp qword ptr [idx*8 + TABLE]                          (absolute entries)
       lea B, [rip + TABLE]; movsxd R, dword ptr [B + idx*4]; add R, B; jmp R
-                                                             (relative entries)
+                                                             (relative entries; at -O0
+                                                             a mov and cdqe instead of movsxd)
     The entry count comes from the nearest `cmp reg, imm` followed by ja/jae;
     without one, entries are read while they point into code (at most 1024).
     """
@@ -168,8 +169,10 @@ def jump_table(elf: Elf, trail, jmp):
                 table = (insn.address + insn.size + insn.operands[1].mem.disp) & mask(64)
                 relative = True
                 break
-        if not any(i.mnemonic == "movsxd" and i.operands[1].type == X.X86_OP_MEM
-                   and i.operands[1].mem.scale == 4 for i in trail[-12:]):
+        # The entry is read as a signed 32-bit value: movsxd from memory, or
+        # (at -O0) a 32-bit mov followed by cdqe.
+        if not any((i.mnemonic == "movsxd" and i.operands[1].type == X.X86_OP_MEM) or i.mnemonic == "cdqe"
+                   for i in trail[-12:]):
             table = None
     if table is None:
         return []
@@ -642,6 +645,9 @@ class Translator:
     def function_c(self, fn):
         out = [f"void {fn.cname}(Ctx *c) {{" + (f"  /* {fn.name} */" if fn.name else "")]
         addrs = sorted(fn.insns)
+        if addrs and addrs[0] != fn.addr:
+            # Code below the start (a block it jumps back to): begin at the start.
+            out.append(f"    goto L_{fn.addr:x};")
         for i, a in enumerate(addrs):
             insn = fn.insns[a]
             out.append(f"L_{a:x}: /* {insn.mnemonic} {insn.op_str} */".replace("*/ */", "* / */"))

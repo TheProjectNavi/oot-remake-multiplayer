@@ -14,7 +14,8 @@ This page collects public information about PS5 programs and sets out how far pr
 - A game's main program is `eboot.bin`; its libraries are `.sprx` files. They are **SELF** files: ELF files that Sony has signed and encrypted. Reading one needs keys from the console. project4thepeople recognises the SELF header and refuses the file. It does not decrypt and never will.
 - A decrypted program is a 64-bit ELF with Sony's own file type numbers *(PS4)*: `ET_SCE_EXEC` (0xFE00), `ET_SCE_DYNEXEC` (0xFE10, the usual main program), `ET_SCE_DYNAMIC` (0xFE18, a library). `project4thepeople info` names them.
 - Extra segment types *(PS4)*: `PT_SCE_DYNLIBDATA` (the import and export tables), `PT_SCE_PROCPARAM` (process settings), `PT_SCE_MODULE_PARAM`, `PT_SCE_RELRO` (loaded like `PT_LOAD`), `PT_SCE_COMMENT`, `PT_SCE_LIBVERSION`.
-- Imports are not by name *(PS4)*. Each imported function has a **NID**: a short ID made by hashing its name. Emulators carry lists that turn NIDs back into names such as `sceKernelOpen` or `scePadRead`.
+- Imports are not by name *(PS4)*. Each imported function has a **NID**: the first 8 bytes of SHA-1(name + a fixed 16-byte salt), written as 11 characters. Since it is a hash, a NID can only be turned back into a name by hashing candidate names; emulators carry lists of known names. `sce.nid()` computes it; the result matches the IDs in public PS4 homebrew code.
+- Imported symbol names look like `NID#L#M`: L and M are the library and module numbers from `DT_SCE_IMPORT_LIB` and `DT_SCE_NEEDED_MODULE`, written in the same 64-character alphabet *(PS4)*.
 
 ## The operating system
 
@@ -26,8 +27,8 @@ This page collects public information about PS5 programs and sets out how far pr
 | Part | What it means | Where project4thepeople is |
 |---|---|---|
 | A decrypted program | From the owner's own console. | Out of scope: this tool does not decrypt and does not help to. |
-| CPU code to C | Translate every function. | Integer instructions work and are tested. Floating point and vector instructions are not done yet. |
-| Loader and linker | Read `PT_SCE_DYNLIBDATA`, apply relocations, connect the NID imports. | Standard ELF imports are read and connected. PlayStation segment types are recognised; their import tables are not read yet. |
+| CPU code to C | Translate every function. | Integer, SSE and SSE2 instructions work and are tested. AVX and AVX2 (which a PS5 program can use) are not done yet. |
+| Loader and linker | Read `PT_SCE_DYNLIBDATA`, apply relocations, connect the NID imports. | Done for the PS4 layout and tested on our own programs rewritten in it: modules, libraries, NID-named imports, `RELATIVE` relocations. Not checked on a real PS5 file. |
 | System libraries | Write a PC version of every `libkernel` and `libSce*` function the game calls (hundreds of them, few documented): threads, memory, files, input, audio, saves. | The machinery is built and tested: imports are connected to PC versions in `runtime/system/`, and missing ones are reported by name (README, "System functions"). No PC version of a real PlayStation function exists yet: what each one does is not public, and it cannot be checked without a game. |
 | Graphics | Translate the GPU command buffers into Vulkan or Direct3D, and every shader from AMD machine code into SPIR-V. | Not started. This is the largest part. |
 | Fixing | Run the game, find what breaks, fix it, for months. | Needs a working game build. |
@@ -42,4 +43,6 @@ Translating the CPU code is a small part of the whole job. Most of the work is t
 
 Before copying code from any of these, check its licence ([AGENTS.md](../../AGENTS.md#licence-rules)).
 
-Sources: [PlayStation 5 emulators (Emulation General Wiki)](https://emulation.gametechwiki.com/index.php/PS5_emulators), [SharpEmu and KytyPS5](https://allthings.how/ps5-emulation-in-what-sharpemu-and-kytyps5-can-run-now/), [AnyPS5](https://tech-insider.org/anyps5-ps5-games-on-pc-without-emulation-2026/), [PS5 emulator boots GTA V's menus](https://www.notebookcheck.net/PS5-emulator-finally-boots-GTA-V-s-menus.1342432.0.html), [prosper](https://alternativeto.net/software/prosper-ps5-/about/).
+Not yet read for this page: the PS4 and PS5 developer wikis (psdevwiki.com could not be reached from the build environment). Their pages on the SELF format, NIDs and PS5 differences are the next thing to check.
+
+Sources: [shadPS4 loader (elf.h, module.cpp, module.h)](https://github.com/shadps4-emu/shadPS4/tree/main/src/core), [PlayStation 5 emulators (Emulation General Wiki)](https://emulation.gametechwiki.com/index.php/PS5_emulators), [SharpEmu and KytyPS5](https://allthings.how/ps5-emulation-in-what-sharpemu-and-kytyps5-can-run-now/), [AnyPS5](https://tech-insider.org/anyps5-ps5-games-on-pc-without-emulation-2026/), [PS5 emulator boots GTA V's menus](https://www.notebookcheck.net/PS5-emulator-finally-boots-GTA-V-s-menus.1342432.0.html), [prosper](https://alternativeto.net/software/prosper-ps5-/about/).
