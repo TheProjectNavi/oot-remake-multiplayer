@@ -27,8 +27,8 @@ This page collects public information about PS5 programs and sets out how far pr
 |---|---|---|
 | A decrypted program | From the owner's own console. | Out of scope: this tool does not decrypt and does not help to. |
 | CPU code to C | Translate every function. | Integer instructions work and are tested. Floating point and vector instructions are not done yet. |
-| Loader and linker | Read `PT_SCE_DYNLIBDATA`, apply relocations, connect the NID imports. | Segment types are recognised; imports are not read yet. |
-| System libraries | Write a PC version of every `libkernel` and `libSce*` function the game calls (hundreds of them, few documented): threads, memory, files, input, audio, saves. | Not started. Only four Linux system calls exist, for the tests. |
+| Loader and linker | Read `PT_SCE_DYNLIBDATA`, apply relocations, connect the NID imports. | Standard ELF imports are read and connected. PlayStation segment types are recognised; their import tables are not read yet. |
+| System libraries | Write a PC version of every `libkernel` and `libSce*` function the game calls (hundreds of them, few documented): threads, memory, files, input, audio, saves. | The machinery is built and tested: imports are connected to PC versions in `runtime/system/`, and missing ones are reported by name (README, "System functions"). No PC version of a real PlayStation function exists yet: what each one does is not public, and it cannot be checked without a game. |
 | Graphics | Translate the GPU command buffers into Vulkan or Direct3D, and every shader from AMD machine code into SPIR-V. | Not started. This is the largest part. |
 | Fixing | Run the game, find what breaks, fix it, for months. | Needs a working game build. |
 

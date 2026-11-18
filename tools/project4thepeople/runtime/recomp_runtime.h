@@ -31,7 +31,19 @@ typedef struct {
     uint64_t filesz;
 } RecompSegment;
 
+/* A slot in the program that the loader fills with an imported symbol's
+ * address (a GOT entry, or a pointer in data). */
+typedef struct {
+    uint64_t slot;
+    int64_t addend;
+    uint32_t import_index;   /* into recomp_import_names */
+} RecompImportSlot;
+
 /* Filled in by the generated code. */
+extern const char *const recomp_import_names[];
+extern const uint64_t recomp_import_count;
+extern const RecompImportSlot recomp_import_slots[];
+extern const uint64_t recomp_import_slot_count;
 extern const RecompFnEntry recomp_functions[];
 extern const uint64_t recomp_function_count;
 extern const RecompSegment recomp_segments[];

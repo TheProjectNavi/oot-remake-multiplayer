@@ -40,8 +40,13 @@ PT_NAMES = {
 PT_SCE_RELRO = 0x61000010
 PF_X, PF_W, PF_R = 1, 2, 4
 
-SHT_SYMTAB, SHT_STRTAB, SHT_DYNSYM = 2, 3, 11
+SHT_SYMTAB, SHT_STRTAB, SHT_RELA, SHT_DYNSYM = 2, 3, 4, 11
 STT_FUNC = 2
+
+R_X86_64_64, R_X86_64_COPY, R_X86_64_GLOB_DAT = 1, 5, 6
+R_X86_64_JUMP_SLOT, R_X86_64_RELATIVE = 7, 8
+RELOC_NAMES = {1: "R_X86_64_64", 5: "R_X86_64_COPY", 6: "R_X86_64_GLOB_DAT",
+               7: "R_X86_64_JUMP_SLOT", 8: "R_X86_64_RELATIVE"}
 
 
 class ElfError(Exception):
@@ -91,6 +96,26 @@ class Symbol:
 
 
 @dataclass
+class Reloc:
+    offset: int      # address of the slot to fill
+    type: int
+    symbol: str      # name of the symbol, "" for none
+    addend: int
+
+    @property
+    def type_name(self):
+        return RELOC_NAMES.get(self.type, str(self.type))
+
+
+@dataclass
+class Import:
+    """A function or value the program takes from a library."""
+    name: str
+    slots: list      # addresses the loader fills with its address
+    is_function: bool
+
+
+@dataclass
 class Elf:
     data: bytes
     type: int
@@ -99,6 +124,8 @@ class Elf:
     segments: list = field(default_factory=list)
     sections: list = field(default_factory=list)
     symbols: list = field(default_factory=list)
+    relocs: list = field(default_factory=list)
+    needed: list = field(default_factory=list)   # libraries named in the dynamic section
 
     @property
     def type_name(self):
@@ -130,6 +157,16 @@ class Elf:
 
     def is_code(self, addr):
         return any(lo <= addr < hi for lo, hi in self.exec_ranges())
+
+    def imports(self):
+        """Imported symbols and the slots that hold their addresses, by name."""
+        out = {}
+        for r in self.relocs:
+            if r.type in (R_X86_64_JUMP_SLOT, R_X86_64_GLOB_DAT, R_X86_64_64) and r.symbol:
+                imp = out.setdefault(r.symbol, Import(r.symbol, [], r.type == R_X86_64_JUMP_SLOT))
+                imp.slots.append((r.offset, r.addend if r.type == R_X86_64_64 else 0))
+                imp.is_function |= r.type == R_X86_64_JUMP_SLOT
+        return [out[k] for k in sorted(out)]
 
     def functions(self):
         """Function symbols with an address inside executable code, by address."""
@@ -194,15 +231,39 @@ def parse(data):
         name = cstr(shstr[4], r[0]) if shstr else ""
         elf.sections.append(Section(name, r[1], r[2], r[3], r[4], r[5], r[6], r[9]))
 
-    for sec in elf.sections:
+    by_section = {}
+    for idx, sec in enumerate(elf.sections):
         if sec.type not in (SHT_SYMTAB, SHT_DYNSYM) or not sec.entsize:
             continue
         strtab = elf.sections[sec.link]
+        syms = []
         for i in range(sec.size // sec.entsize):
             st_name, st_info, _other, st_shndx, st_value, st_size = struct.unpack_from(
                 "<IBBHQQ", data, sec.offset + i * sec.entsize)
-            elf.symbols.append(Symbol(cstr(strtab.offset, st_name), st_value, st_size,
-                                      st_info & 0xF, st_info >> 4, st_shndx))
+            syms.append(Symbol(cstr(strtab.offset, st_name), st_value, st_size,
+                               st_info & 0xF, st_info >> 4, st_shndx))
+        by_section[idx] = syms
+        elf.symbols += syms
+
+    for sec in elf.sections:
+        if sec.type != SHT_RELA or not sec.entsize:
+            continue
+        syms = by_section.get(sec.link, [])
+        for i in range(sec.size // sec.entsize):
+            r_offset, r_info, r_addend = struct.unpack_from("<QQq", data, sec.offset + i * sec.entsize)
+            si = r_info >> 32
+            name = syms[si].name if 0 < si < len(syms) else ""
+            elf.relocs.append(Reloc(r_offset, r_info & 0xFFFFFFFF, name, r_addend))
+
+    dyn = next((s for s in elf.sections if s.name == ".dynamic"), None)
+    dynstr = next((s for s in elf.sections if s.name == ".dynstr"), None)
+    if dyn and dynstr:
+        for off in range(dyn.offset, dyn.offset + dyn.size, 16):
+            tag, val = struct.unpack_from("<qQ", data, off)
+            if tag == 0:
+                break
+            if tag == 1:  # DT_NEEDED
+                elf.needed.append(cstr(dynstr.offset, val))
     return elf
 
 

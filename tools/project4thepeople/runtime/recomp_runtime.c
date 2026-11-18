@@ -6,6 +6,7 @@
  * would be replaced here, one by one (see ../PS5.md). */
 #define _GNU_SOURCE
 #include "recomp_runtime.h"
+#include "recomp_system.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -19,9 +20,71 @@ uint8_t *recomp_mem;
 #define GUEST_SPACE   (1ull << 32)
 #define STACK_TOP     0xF0000000ull
 #define STACK_SIZE    (8ull << 20)
-#define HEAP_START    0xC0000000ull
+#define HEAP_START    0xC0000000ull     /* brk */
+#define ALLOC_START   0xD0000000ull     /* recomp_guest_alloc */
+#define ALLOC_END     0xEE000000ull
+/* Imported functions get made-up addresses here, past the stack. A call to
+ * one lands in recomp_dispatch, which runs its PC version. */
+#define IMPORT_BASE   0xFF000000ull
+#define IMPORT_STRIDE 16ull
 
 static uint64_t heap_brk = HEAP_START;
+static uint64_t alloc_next = ALLOC_START;
+
+extern const RecompSystemTable *const recomp_system_tables[];
+extern const uint64_t recomp_system_table_count;
+
+/* PC version of each import (NULL: none), by import index. */
+static void (**import_fns)(Ctx *);
+static uint8_t *import_reported;
+
+uint64_t recomp_guest_alloc(uint64_t size) {
+    uint64_t at = (alloc_next + 15) & ~15ull;
+    if (size > ALLOC_END - at) recomp_fail("out of guest memory for system allocations", size);
+    alloc_next = at + size;
+    memset(recomp_mem + at, 0, size);
+    return at;
+}
+
+static void (*find_system_fn(const char *name))(Ctx *) {
+    for (uint64_t t = 0; t < recomp_system_table_count; t++) {
+        const RecompSystemTable *tab = recomp_system_tables[t];
+        for (uint64_t i = 0; i < tab->count; i++)
+            if (strcmp(tab->fns[i].name, name) == 0) return tab->fns[i].fn;
+    }
+    return NULL;
+}
+
+static void bind_imports(void) {
+    import_fns = calloc(recomp_import_count + 1, sizeof *import_fns);
+    import_reported = calloc(recomp_import_count + 1, 1);
+    for (uint64_t i = 0; i < recomp_import_count; i++)
+        import_fns[i] = find_system_fn(recomp_import_names[i]);
+    for (uint64_t i = 0; i < recomp_import_slot_count; i++) {
+        const RecompImportSlot *s = &recomp_import_slots[i];
+        WR64(s->slot, IMPORT_BASE + s->import_index * IMPORT_STRIDE + (uint64_t)s->addend);
+    }
+}
+
+static int call_import(Ctx *c, uint64_t addr) {
+    if (addr < IMPORT_BASE) return 0;
+    uint64_t i = (addr - IMPORT_BASE) / IMPORT_STRIDE;
+    if (i >= recomp_import_count || (addr - IMPORT_BASE) % IMPORT_STRIDE) return 0;
+    if (import_fns[i]) {
+        import_fns[i](c);
+    } else {
+        if (!import_reported[i]) {
+            import_reported[i] = 1;
+            fflush(stdout);
+            fprintf(stderr, "project4thepeople: missing system function: %s\n", recomp_import_names[i]);
+            const char *strict = getenv("P4TP_STRICT");
+            if (strict && strict[0] == '1') exit(126);
+        }
+        c->r[RAX] = 0;
+    }
+    c->r[RSP] += 8;  /* the return address the call pushed, as `ret` would */
+    return 1;
+}
 
 void recomp_fail(const char *what, uint64_t addr) {
     fflush(stdout);
@@ -30,6 +93,7 @@ void recomp_fail(const char *what, uint64_t addr) {
 }
 
 void recomp_dispatch(Ctx *c, uint64_t addr) {
+    if (call_import(c, addr)) return;
     uint64_t lo = 0, hi = recomp_function_count;
     while (lo < hi) {
         uint64_t mid = (lo + hi) / 2;
@@ -126,6 +190,8 @@ int main(int argc, char **argv) {
         if (s->vaddr + s->memsz > STACK_TOP - STACK_SIZE) recomp_fail("segment too high", s->vaddr);
         memcpy(recomp_mem + s->vaddr, s->bytes, s->filesz);
     }
+
+    bind_imports();
 
     /* Start-up stack as Linux builds it: argc, argv[], NULL, envp NULL, auxv AT_NULL. */
     Ctx c;

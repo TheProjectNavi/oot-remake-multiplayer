@@ -44,10 +44,31 @@ def cmd_info(args):
         print(f"  {s.name:<20} {fl} vaddr {s.vaddr:#12x} file {s.filesz:#10x} mem {s.memsz:#10x}")
     funcs = elf.functions()
     print(f"functions: {len(funcs)} with symbols" + ("" if funcs else " (stripped: found by following code)"))
+    imports = elf.imports()
+    if imports:
+        print(f"libraries: {', '.join(elf.needed) or '(none named)'}")
+        print(f"imports:   {len(imports)}")
+        known = system_function_names()
+        for imp in imports:
+            state = "PC version" if imp.name in known else "no PC version yet"
+            kind = "function" if imp.is_function else "value"
+            print(f"  {imp.name:<32} {kind:<8} {state}")
     if elf.is_playstation:
         print("note:      PlayStation programs call system libraries (graphics, files, input) "
               "that are not in the file. See PS5.md.")
     return 0
+
+
+def system_function_names():
+    """Names listed in the runtime/system tables (the PC versions)."""
+    import re
+    names = set()
+    folder = os.path.join(RUNTIME_DIR, "system")
+    for n in os.listdir(folder):
+        if n.endswith(".c"):
+            with open(os.path.join(folder, n), encoding="utf-8") as f:
+                names.update(re.findall(r'\{\s*"([^"]+)"\s*,\s*\w+\s*\}', f.read()))
+    return names
 
 
 def c_bytes(data):
@@ -101,9 +122,29 @@ def cmd_recomp(args):
         for fn in funcs:
             f.write(f"    {{ {fn.addr:#x}ull, {fn.cname} }},\n")
         f.write("};\n")
-        f.write(f"const uint64_t recomp_function_count = {len(funcs)};\n")
+        f.write(f"const uint64_t recomp_function_count = {len(funcs)};\n\n")
+        imports = elf.imports()
+        f.write("const char *const recomp_import_names[] = {\n")
+        for imp in imports:
+            f.write(f'    "{imp.name}",\n')
+        f.write("    0 };\n")
+        f.write(f"const uint64_t recomp_import_count = {len(imports)};\n")
+        f.write("const RecompImportSlot recomp_import_slots[] = {\n")
+        n_slots = 0
+        for i, imp in enumerate(imports):
+            for slot, addend in imp.slots:
+                f.write(f"    {{ {slot:#x}ull, {addend}, {i} }},\n")
+                n_slots += 1
+        f.write("    { 0, 0, 0 } };\n")
+        f.write(f"const uint64_t recomp_import_slot_count = {n_slots};\n")
 
     print(f"{len(funcs)} functions, {insn_count} instructions -> {args.output}")
+    if imports:
+        known = system_function_names()
+        missing = [i.name for i in imports if i.name not in known]
+        print(f"{len(imports)} imports, {len(imports) - len(missing)} with a PC version")
+        if missing:
+            print("no PC version yet (reported when called): " + ", ".join(missing))
     if tr.unsupported:
         total = sum(tr.unsupported.values())
         print(f"{total} instructions not supported yet (they stop the program if reached):")
@@ -117,6 +158,8 @@ def cmd_build(args):
     sources = sorted(os.path.join(args.dir, n) for n in os.listdir(args.dir)
                      if n.startswith("recomp_") and n.endswith(".c"))
     sources.append(os.path.join(RUNTIME_DIR, "recomp_runtime.c"))
+    system_dir = os.path.join(RUNTIME_DIR, "system")
+    sources += sorted(os.path.join(system_dir, n) for n in os.listdir(system_dir) if n.endswith(".c"))
     cmd = [cc, f"-O{args.opt}", "-w", "-fwrapv", "-I", RUNTIME_DIR, "-I", args.dir,
            *sources, "-o", args.output]
     print(" ".join(cmd))

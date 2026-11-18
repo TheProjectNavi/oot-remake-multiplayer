@@ -133,5 +133,81 @@ class RecompileTest(unittest.TestCase):
                         self.check(cc, opt, prog, strip=True)
 
 
+SYSDEMO = os.path.join(HERE, "sysdemo")
+PAD_SCRIPT = "8\n8\n17\n2\n0\n4\n24\n1\n"
+
+
+@unittest.skipUnless(CAN_RUN and HAVE_CAPSTONE, "needs Linux x86-64, a C compiler and capstone")
+class SystemLibraryTest(unittest.TestCase):
+    """A program that uses a made-up console library (tests/sysdemo): the
+    original runs with the library, the recompiled one with the PC versions
+    in runtime/system. Both must behave the same."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="project4thepeople_sys_")
+        with open(os.path.join(cls.tmp, "p4tp_pad.txt"), "w") as f:
+            f.write(PAD_SCRIPT)
+        with open(os.path.join(cls.tmp, "p4tp_data.txt"), "w") as f:
+            f.write("hello from a file\n")
+        r = run(["gcc", "-O2", "-shared", "-fPIC", "-nostdlib", "-fno-builtin",
+                 "-fno-tree-loop-distribute-patterns", "-fno-stack-protector",
+                 os.path.join(SYSDEMO, "p4tp_sys.c"), "-o", os.path.join(cls.tmp, "libp4tp_sys.so")])
+        assert r.returncode == 0, r.stderr.decode()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def build(self, prog, cc, opt, extra=()):
+        tag = f"{prog}-{cc}{opt}{''.join(extra)}"
+        exe = os.path.join(self.tmp, tag)
+        flags = [f for f in FLAGS if f != "-static"] + ["-no-pie"]
+        r = run([cc, opt, *flags, *extra, os.path.join(SYSDEMO, prog + ".c"),
+                 "-L", self.tmp, "-lp4tp_sys", f"-Wl,-rpath,{self.tmp}", "-lgcc", "-o", exe])
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        out = exe + ".c"
+        r = run([sys.executable, os.path.join(TOOL, "project4thepeople.py"), "recomp", exe, "-o", out])
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        rexe = exe + ".recomp"
+        r = run([sys.executable, os.path.join(TOOL, "project4thepeople.py"), "build", out, "-o", rexe])
+        self.assertEqual(r.returncode, 0, r.stderr.decode() + r.stdout.decode())
+        return exe, rexe
+
+    def test_game_matches(self):
+        variants = [(), ("-s",), ("-fno-plt",)]
+        for cc in COMPILERS:
+            for opt in ("-O0", "-O2", "-Os"):
+                for extra in variants:
+                    with self.subTest(cc=cc, opt=opt, extra=extra):
+                        exe, rexe = self.build("game", cc, opt, extra)
+                        native = run([exe], cwd=self.tmp)
+                        recomp = run([rexe], cwd=self.tmp)
+                        self.assertIn(b"frame 7 buttons 1 at 2,-1", native.stdout)
+                        self.assertIn(b"called through a pointer", native.stdout)
+                        self.assertEqual(recomp.stderr, b"")
+                        self.assertEqual(native.stdout, recomp.stdout)
+                        self.assertEqual(native.returncode, recomp.returncode)
+
+    def test_missing_function_is_reported(self):
+        exe, rexe = self.build("extra", COMPILERS[0], "-O2")
+        self.assertEqual(run([exe], cwd=self.tmp).stdout, b"before\nextra 42\n")
+        r = run([rexe], cwd=self.tmp)
+        self.assertEqual(r.stdout, b"before\nextra not there\n")
+        self.assertEqual(r.stderr, b"project4thepeople: missing system function: sys_extra\n")
+        self.assertEqual(r.returncode, 3)
+        r = run([rexe], cwd=self.tmp, env={**os.environ, "P4TP_STRICT": "1"})
+        self.assertEqual(r.stdout, b"before\n")
+        self.assertEqual(r.returncode, 126)
+
+    def test_info_lists_imports(self):
+        exe, _ = self.build("extra", COMPILERS[0], "-O2")
+        r = run([sys.executable, os.path.join(TOOL, "project4thepeople.py"), "info", exe])
+        text = r.stdout.decode()
+        self.assertIn("libp4tp_sys.so", text)
+        self.assertRegex(text, r"sys_print\s+function\s+PC version")
+        self.assertRegex(text, r"sys_extra\s+function\s+no PC version yet")
+
+
 if __name__ == "__main__":
     unittest.main()
