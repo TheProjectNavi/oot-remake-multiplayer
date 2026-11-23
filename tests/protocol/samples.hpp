@@ -156,6 +156,8 @@ inline std::vector<Message> every_message() {
     all.push_back(mods);
     all.push_back(ModList{});
     all.push_back(ModSettings{2, {{"oot-remake-rando", "seed", "ABCD-1234"}, {"oot-remake-rando", "logic", ""}}});
+    all.push_back(ModData{3, "coop", "skin", {'M', 0, 0xab}});
+    all.push_back(ModData{0, "coop", "skin", {}});
   }
   all.push_back(PlayerJoined{4, "Darunia"});
   all.push_back(PlayerLeft{1, LeaveReason::timed_out});

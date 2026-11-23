@@ -120,6 +120,7 @@ add_executable(coop_tests
   lichii/dbno_body_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_dbno_body.cpp
   lichii/difficulty_test.cpp
   lichii/ngplus_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_ngplus_rules.cpp
+  lichii/mod_data_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_mod_data.cpp
   lichii/live_events_test.cpp
   lichii/presence_gates_test.cpp
   lichii/logic_probe_test.cpp

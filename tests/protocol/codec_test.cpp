@@ -2683,6 +2683,36 @@ TEST_CASE("mod settings: type 491, session channel, unique keys (modloader)") {
   CHECK(encode(longer, out) == Error::string_too_long);
 }
 
+TEST_CASE("mod data: type 492, session channel, a key per mod and at most 64 bytes (issue 250)") {
+  CHECK(static_cast<int>(MessageType::mod_data) == 492);
+  CHECK(channel_of(MessageType::mod_data) == kChannelSession);
+  CHECK(may_send(Sender::client, MessageType::mod_data));
+  CHECK(may_send(Sender::server, MessageType::mod_data));
+  const ModData m{2, "coop", "skin", {'M', 0, 1, 2}};
+  Message back;
+  REQUIRE(decode(must_encode(Message{m}), back) == Error::none);
+  CHECK(back == Message{m});
+  const ModData cleared{0, "coop", "skin", {}};
+  REQUIRE(decode(must_encode(Message{cleared}), back) == Error::none);
+  CHECK(back == Message{cleared});
+  Bytes out;
+  const auto bad = [&](auto change) {
+    ModData c = m;
+    change(c);
+    return encode(c, out) != Error::none;
+  };
+  CHECK(bad([](ModData& c) { c.key = "Skin"; }));
+  CHECK(bad([](ModData& c) { c.key.clear(); }));
+  CHECK(bad([](ModData& c) { c.key = std::string(kMaxModDataKeyChars + 1, 'k'); }));
+  CHECK(bad([](ModData& c) { c.mod_id = "x y"; }));
+  CHECK(bad([](ModData& c) { c.value.assign(kMaxModDataValueBytes + 1, 1); }));
+  CHECK(bad([](ModData& c) { c.player_number = 17; }));
+  // A length past the limit is refused on reading too.
+  Bytes b = must_encode(Message{m});
+  b[b.size() - m.value.size() - 1] = static_cast<std::uint8_t>(kMaxModDataValueBytes + 1);
+  CHECK(decode(b, back) != Error::none);
+}
+
 TEST_CASE("local players: types 460 to 464, their channels and senders (split screen)") {
   CHECK(static_cast<int>(MessageType::local_join) == 460);
   CHECK(static_cast<int>(MessageType::local_message) == 464);
