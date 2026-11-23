@@ -1295,6 +1295,31 @@ bool Start(const HosCoopApi* api) {
     if (!server) {
         LOG_INFO(Core, "coop: no server in coop.ini: co-op idle until Host or Join on the menu's Multiplayer tab");
     }
+    // (Navi) NAVI_COOP_HOST=1: this game hosts at its start, as the Multiplayer tab's Host does, on 127.0.0.1 only: Navi's
+    // Online tab carries each friend's UDP over its own link (navi/tunnel.py UdpTunnel), so no router port, UPnP or invite.
+    // NAVI_COOP_NAME and NAVI_COOP_PASSWORD are Navi's (the password is in Navi's invite); NAVI_COOP_PORT, else 27510.
+    if (EnvOn("NAVI_COOP_HOST")) {
+        static const std::string navi_name = Env("NAVI_COOP_NAME"), navi_password = Env("NAVI_COOP_PASSWORD"),
+                                 navi_port = Env("NAVI_COOP_PORT");
+        HosCoopHostOptions o{};
+        o.size = sizeof o;
+        o.name = navi_name.empty() ? nullptr : navi_name.c_str();
+        o.password = navi_password.empty() ? nullptr : navi_password.c_str();
+        o.port = navi_port.empty() ? 0 : static_cast<std::uint16_t>(std::atoi(navi_port.c_str()));
+        o.max_players = 4;
+        o.pvp = EnvOn("NAVI_COOP_PVP") ? 1 : 0;
+        LOG_INFO(Core, "coop: Navi: hosting at the start for Navi's Online tab: {}",
+                 HostMenu().HostStart(&o) ? "started" : "did not start (see the lines above)");
+    }
+    // (Navi) NAVI_COOP_JOIN=1: Navi's Online tab connected this game at its start (LICHII_COOP_SERVER, its own link's end):
+    // the Multiplayer tab says Connected, not Joining, and its Leave ends it
+    if (EnvOn("NAVI_COOP_JOIN") && server) {
+        const std::string navi_join_port = Env("LICHII_COOP_PORT");
+        HostMenu().NaviConnected(navi_join_port.empty() ? coop::protocol::kDefaultPort
+                                                        : static_cast<std::uint16_t>(std::atoi(navi_join_port.c_str())),
+                                 "Connected through Navi");
+        LOG_INFO(Core, "coop: Navi: connected through Navi's Online tab: the Multiplayer tab says Connected");
+    }
     // The same switches that make the emulator put its cave in.
     CoopLook::AgreeStartTunic();  // your start tunic from the pack's files, before the puppets read it (coop_look.h)
     if (EnvOn("LICHII_COOP_PUPPET") || EnvOn("LICHII_COOP_DEBUG_PUPPET")) {

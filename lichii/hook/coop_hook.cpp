@@ -112,6 +112,8 @@
 #include "coop_char_colours.h"
 #include "coop_charsel_tidy.h"
 #include "coop_look_share.h"
+#include "coop_mod_data.h"
+#include "coop_mod_data.h"
 #include "coop_ocarina_sound.h"
 #include "coop_pose.h"
 #include "coop_puppet.h"
@@ -802,6 +804,7 @@ public:
         CoopSave::OnEvent(event, client);  // the host's save for the guests (issue 167)
         CoopHud::OnEvent(event);  // the others' hearts for the HUD (PLAYER_LIFE)
         CoopLookShare::OnEvent(event, client);  // looks of several parts (PLAYER_LOOK, coop_look_share.h)
+        CoopModData::OnEvent(event, client);  // mods' small values, our skin (MOD_DATA, coop_mod_data.h)
         if (event.kind == coop::net::EventKind::message) {  // deku-dungeon-2
             if (const auto* e = std::get_if<coop::protocol::DungeonEvent>(&event.message)) {
                 std::lock_guard lock(dungeon_events_mutex_);
@@ -1860,6 +1863,11 @@ public:
         }
         // Our look of several parts, chosen in the Multiplayer tab (coop_look_share.h).
         CoopLookShare::Frame(report.connected ? session_.get() : nullptr);
+        // Our mod data, the skin we wear among it (coop_mod_data.h).
+        CoopModData::Frame(report.connected ? session_.get() : nullptr,
+                           static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                          std::chrono::steady_clock::now().time_since_epoch())
+                                                          .count()));
         // The sounds the game starts on our own Link, for the other games (coop_link_sound.h).
         CoopLinkSound::Frame(report.connected ? session_.get() : nullptr,
                              static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(

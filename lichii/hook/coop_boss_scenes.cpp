@@ -424,6 +424,13 @@ void Director::Ours(const Request& r, const Local& local, std::uint64_t now_us, 
     playing_ = Playing{b, kind};
     playing_->own_setting = r.name != flow;
     if (kind == Kind::intro) {
+        if (late_death_ && f.phase == Phase::done && f.outro_by != 0 && f.outro_by != local.self && !f.our_outro &&
+            !f.late_gave_up) {   // (Navi) beaten by another player in this session: its death plays here instead
+            Skip("beaten by another player: its death plays here instead", now_us, out);
+            out.log.push_back(label + ": " + std::string(kBosses[b].name) + " was beaten by player " +
+                              std::to_string(f.outro_by) + ": the intro is skipped, the death follows");
+            return;
+        }
         if (f.phase == Phase::none || f.phase == Phase::done) {
             f = Fight{};
             f.phase = Phase::intro;
@@ -441,6 +448,7 @@ void Director::Ours(const Request& r, const Local& local, std::uint64_t now_us, 
         }
         return;
     }
+    f.our_outro = true;   // (Navi) our game plays this boss's death: no late death for it
     if (f.phase < Phase::outro) {
         f.phase = Phase::outro;
         f.outro_by = local.self;
@@ -532,6 +540,27 @@ Actions Director::Tick(const Local& local, const std::vector<Request>& ours, std
                 out.move_to = to;
                 out.log.push_back(std::string(kBosses[b].name) + ": moving in to the room's start (try " +
                                   std::to_string(f.moves) + ")");
+            }
+        }
+        // (Navi) The late death: a boss another player beat in this session, alive in our game in its room.
+        if (late_death_ && room != nullptr && f.phase == Phase::done && f.outro_by != 0 && f.outro_by != local.self &&
+            !f.our_outro && !f.late_gave_up && local.scene == room->scene && local.position &&
+            InRoom(kBosses[b], f.scene, f.starter_at, *local.scene, *local.position) && local.boss_alive == true &&
+            !local.event && !playing_ && !out.play && (f.late_tries == 0 || now_us - f.late_at >= kMoveEveryUs)) {
+            if (f.late_tries >= kLateTries) {
+                f.late_gave_up = true;
+                out.chat.push_back({f.outro_by, "beat " + std::string(kBosses[b].name) +
+                                                    ", but its death did not play here: beat it yourself to go on"});
+                out.log.push_back(std::string(kBosses[b].outro) + ": our game did not play the late death after " +
+                                  std::to_string(kLateTries) + " tries: the boss is fought here");
+            } else {
+                ++f.late_tries;
+                f.late_at = now_us;
+                f.asked_at = now_us;
+                out.play = std::string(kBosses[b].outro);
+                out.log.push_back(*out.play + ": " + std::string(kBosses[b].name) + " was beaten by player " +
+                                  std::to_string(f.outro_by) + ": its death plays here (try " +
+                                  std::to_string(f.late_tries) + ")");
             }
         }
         // The one heart container, in its beaten boss's area.

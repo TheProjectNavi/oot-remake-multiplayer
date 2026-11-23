@@ -19,7 +19,12 @@ namespace {
 constexpr int kHueStep = 10;    // degrees a press (wraps round)
 constexpr int kLevelStep = 5;   // percent a press on Saturation or Brightness
 
-enum class What { kHeading, kPart, kAllGame, kHue, kSaturation, kBrightness, kPreset, kGameOwn, kDone, kNote };
+enum class What { kHeading, kPart, kAllGame, kHue, kSaturation, kBrightness, kPreset, kGameOwn, kDone, kNote, kCharacter, kSeeLink };
+
+// What a custom model's row says of its ages.
+std::string Ages(const Character& ch) {
+    return ch.child && ch.adult ? "Child and adult" : ch.adult ? "Adult only" : "Child only";
+}
 
 // The game's own colours, near enough for the picture (the textures' averages).
 std::uint32_t GameColour(Part part) {
@@ -280,6 +285,7 @@ struct Page::Line {
     What what = What::kHeading;
     Part part = Part::tunic;
     std::string help;
+    std::string character;   // kCharacter: the skin's id, "" for Link
 };
 
 std::vector<Page::Line> Page::Lines() const {
@@ -331,6 +337,27 @@ std::vector<Page::Line> Page::Lines() const {
         }
         return out;
     }
+    // The Characters rows.
+    const bool known = pick_.id.empty() ||
+                       std::any_of(custom_.begin(), custom_.end(), [&](const Character& ch) { return ch.id == pick_.id; });
+    const auto worn = [&](const std::string& id) { return (known ? pick_.id == id : id.empty()) ? "Wearing" : ""; };
+    const std::string when =
+        "Confirm wears it. The other players see it on your Link once co-op can send it (the mod-data channel); "
+        "your own Link changes at the next start.";
+    out.push_back({{"Game characters", "", 3}, What::kHeading, Part::tunic, ""});
+    out.push_back({{"Link", worn(""), 0}, What::kCharacter, Part::tunic, "Link, the game's own model. " + when, ""});
+    out.push_back({{"Custom models", "", 3}, What::kHeading, Part::tunic, ""});
+    if (custom_.empty()) {
+        out.push_back({{"None in the puppet pack yet: put a model mod in the kit's coop-models folder and start again",
+                        "", 4},
+                       What::kHeading, Part::tunic, ""});
+    }
+    for (const Character& ch : custom_) {
+        out.push_back({{ch.id, worn(ch.id), 0}, What::kCharacter, Part::tunic,
+                       "A custom model (" + Ages(ch) + "; the other age stays Link). " + when, ch.id});
+    }
+    out.push_back({{"See everyone as Link", pick_.everyone_link ? "On" : "Off", 1, true, true}, What::kSeeLink,
+                   Part::tunic, "On: the other players' Links stay Link on your screen, whatever model they wear."});
     std::string item;
     for (const PartInfo& info : CoopLook::Parts()) {
         if (item != info.item) {
@@ -400,7 +427,7 @@ void Page::Open(const CoopLook::Look& look) {
     editing_.reset();
     changed_ = false;
     if (!Selectable(selected_)) {
-        selected_ = 1;   // the first part, under its heading
+        selected_ = 1;   // Link, under its heading
     }
     const auto lines = Lines();
     if (selected_ < lines.size()) {
@@ -446,6 +473,10 @@ void Page::Change(std::size_t row, int step) {
     }
     const Line& l = lines[row];
     switch (l.what) {
+    case What::kSeeLink:
+        pick_.everyone_link = !pick_.everyone_link;
+        character_changed_ = true;
+        break;
     case What::kPart: Set(l.part, NextPreset(look_[l.part], step)); break;
     case What::kPreset:
         Set(l.part, NextPreset(look_[l.part], step));
@@ -473,6 +504,13 @@ void Page::Decide(std::size_t row) {
     }
     const Line& l = lines[row];
     switch (l.what) {
+    case What::kCharacter:
+        if (pick_.id != l.character) {
+            pick_.id = l.character;
+            character_changed_ = true;
+        }
+        break;
+    case What::kSeeLink: Change(row, 1); break;
     case What::kPart:
         list_selected_ = row;
         editing_ = l.part;
@@ -541,6 +579,20 @@ void Page::Click(std::size_t row, int side) {
     }
 }
 
+void Page::SetCharacters(std::vector<Character> custom, CharacterPick pick) {
+    custom_ = std::move(custom);
+    pick_ = std::move(pick);
+    character_changed_ = false;
+}
+
+std::optional<CharacterPick> Page::TakeCharacter() {
+    if (!character_changed_) {
+        return std::nullopt;
+    }
+    character_changed_ = false;
+    return pick_;
+}
+
 std::optional<CoopLook::Look> Page::TakeChange() {
     if (!changed_) {
         return std::nullopt;
@@ -558,10 +610,12 @@ View Page::view() const {
     const std::size_t sel = std::min(selected_, lines.size() - 1);
     v.selected = static_cast<int>(sel);
     const Line& l = lines[sel];
-    v.help_title = l.what == What::kAllGame ? std::string("Link's look") : Title(l.part);
+    v.help_title = l.what == What::kAllGame                                  ? std::string("Link's look")
+                   : l.what == What::kCharacter || l.what == What::kSeeLink ? std::string("Character")
+                                                                           : Title(l.part);
     v.help = l.help;
-    v.change = l.row.kind == 1 ? "Colour" : "";
-    v.confirm = l.what == What::kPart ? "Mix" : l.row.kind == 0 ? "Choose" : "";
+    v.change = l.what == What::kSeeLink ? "Switch" : l.row.kind == 1 ? "Colour" : "";
+    v.confirm = l.what == What::kPart ? "Mix" : l.what == What::kCharacter ? "Wear" : l.row.kind == 0 ? "Choose" : "";
     v.back = "Back";
     // The picture, the part looked at outlined.
     const std::optional<Part> mark = editing_ ? editing_ : l.what == What::kPart ? std::optional<Part>(l.part) : std::nullopt;

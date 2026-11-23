@@ -3328,6 +3328,7 @@ private:
             main_ = FindMain(system, process);
             actors_.clear();
             first_ = true;
+            listed_ = false;
             names_.clear();
             stamps_.clear();
             no_area_.clear();
@@ -5912,7 +5913,9 @@ private:
             node = r.Ptr(*node);
         }
         const bool whole = node && walked == *count;
-        if (first_ && whole) {
+        // Once a game run: the list is read every frame (Collect), and first_ is the debug walk's only.
+        if (!listed_ && whole) {
+            listed_ = true;
             LOG_INFO(Core, "coop: objects: list head {:#x}, {} entries, {} actors", head, walked,
                      out.size());
         }
@@ -6233,6 +6236,7 @@ private:
     Kernel::KProcess* process_ = nullptr;
     u64 main_ = 0;
     bool first_ = true;
+    bool listed_ = false;   // the list head said once this game run (List)
     std::unordered_map<u64, Actor> actors_;
 };
 
@@ -6289,6 +6293,23 @@ std::optional<LinkHearts> OurLife() {
         return std::nullopt;
     }
     return LinkHearts{TheLife().life.load(), TheLife().max.load()};
+}
+
+std::optional<std::int32_t> RaiseLinkMax(Core::System& system, std::uint64_t actor, std::int32_t quarters) {
+    auto& memory = system.ApplicationMemory();
+    Reader r(memory);
+    const auto table = r.Ptr(actor + kActorComponents);
+    const auto life = table ? r.Ptr(*table + kComponentLife) : std::nullopt;
+    const auto max_at = life ? r.Ptr(*life + kLifeMax) : std::nullopt;
+    if (!max_at || quarters <= 0 || quarters > 80 || !memory.IsValidVirtualAddressRange(*max_at + 8, 4)) {
+        return std::nullopt;
+    }
+    const s32 max = r.Get<s32>(*max_at + 8).value_or(-1);
+    if (max <= 0 || max >= quarters) {
+        return std::nullopt;
+    }
+    memory.Write32(*max_at + 8, static_cast<u32>(quarters));
+    return max;
 }
 
 void SetMaxLife(std::optional<std::int32_t> quarters) {

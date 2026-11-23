@@ -450,6 +450,17 @@ int Menu::Join(const HosCoopJoinOptions* o) {
     return 1;
 }
 
+void Menu::NaviConnected(std::uint16_t port, const std::string& note) {
+    std::lock_guard calls(calls_);
+    direct_connected_ = true;
+    std::lock_guard lock(mutex_);
+    status_ = HosCoopStatus{};
+    status_.size = sizeof status_;
+    status_.state = HOS_COOP_CONNECTED;
+    status_.port = port;
+    CopyText(status_.message, sizeof status_.message, note);
+}
+
 void Menu::RunJoin(JoinJob job) {
     try {
         if (enet_initialize() != 0) {

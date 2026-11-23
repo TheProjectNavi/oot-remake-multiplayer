@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <deque>
 #include <filesystem>
+#include <ctime>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -150,6 +151,44 @@ bool RemountLocked(const fs::path& dir);
 void FixSlotsLocked();
 save::WriteResult WriteSlotTo(const fs::path& dir, const save::SaveSlot& slot, bool played_from = true);
 void PendingFrame();
+
+// (Navi, 2026-11-15) Under g_mutex: a guest's own saves (the solo folder and the multiplayer one beside it) copied
+// to user/save-backups/<folder>-<time> when it joins, the newest 5 of each kept. A friend's solo save was mixed with
+// the host's game (it joined with that save loaded, and the game's autosaves wrote the shared world into it): with
+// this, a session can never cost a player their own progress.
+void BackupOwnLocked(const fs::path& own) {
+    fs::path solo = save::own_dir_of(own);
+    if (const std::string n = solo.filename().string(); n.size() > 3 && n.compare(n.size() - 3, 3, "-mp") == 0) {
+        solo = solo.parent_path() / n.substr(0, n.size() - 3);
+    }
+    const fs::path root = solo.parent_path().parent_path() / "save-backups";
+    const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tm{};
+#ifdef _MSC_VER
+    localtime_s(&tm, &now);
+#else
+    localtime_r(&now, &tm);
+#endif
+    char stamp[32];
+    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
+    for (fs::path from : {solo, fs::path(solo.string() + "-mp")}) {
+        std::error_code ec;
+        if (!fs::is_directory(from, ec)) continue;
+        const std::string name = from.filename().string();
+        const fs::path to = root / (name + "-" + stamp);
+        fs::create_directories(root, ec);
+        fs::copy(from, to, fs::copy_options::recursive, ec);
+        LOG_INFO(Core, "coop: save: your own saves backed up before joining: {}{}", to.string(),
+                 ec ? " (failed: " + ec.message() + ")" : std::string());
+        std::vector<fs::path> old;   // the newest 5 of this folder's backups kept
+        for (fs::directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+            const std::string b = it->path().filename().string();
+            if (b.size() == name.size() + 16 && b.compare(0, name.size() + 1, name + "-") == 0) old.push_back(it->path());
+        }
+        std::sort(old.begin(), old.end());
+        for (std::size_t i = 0; i + 5 < old.size(); ++i) fs::remove_all(old[i], ec);
+    }
+}
 void AskAtTitle();
 
 // Under g_mutex: a session's choice with a file loaded (a Join from the pause menu, a rejoin during play): nothing
@@ -244,6 +283,7 @@ void SwitchFrame(coop::net::Client& client) {
         }
         g_use = choice == save::FolderChoice::coop;
         if (g_use) {
+            BackupOwnLocked(own);   // (Navi) the player's own saves kept first, whatever comes next
             g_pending = save::coop_dir_of(own);
             // Empty until the host's save comes: an older host's save there must not be the one loaded.
             if (const int n = save::clear_coop_slots(g_pending); n > 0) {

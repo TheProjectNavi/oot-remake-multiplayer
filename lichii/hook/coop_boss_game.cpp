@@ -226,6 +226,7 @@ struct Glue {
     Glue() {
         on = Env("LICHII_COOP_BOSS") != "0";
         scenes_on = Env("LICHII_COOP_BOSS_SCENES") != "0";
+        scenes.SetLateDeath(Env("LICHII_COOP_BOSS_LATE_DEATH") != "0");   // (Navi)
         by_scene = Env("LICHII_COOP_BOSS_MOVE") != "matrix";
         const auto d = Env("LICHII_COOP_DEBUG_BOSS");
         debug = !d.empty() && d != "0";

@@ -1,0 +1,88 @@
+oot-remake-multiplayer 0.11.10 (protocol 15) by daurosk and contributors, https://github.com/daurosk/oot-remake-multiplayer
+(GPL-3.0, LICENSE). From the source zip of main as of 2026-11-22 (cc0bc549), merged three ways with Navi's copy (0.11.4
+merge + skins, skin gear, title resync). Both character systems are kept: Navi's custom models (Malon, Zelda, Dark Link
+and the others, over the mod-data channel) go first; without one, daurosk's Character Select pick and the tunic colour.
+Engine: 0.11.10 asks two optional exports Navi-main does not have yet (hos_coop_fs_save_slot_opened, hos_coop_hud_refresh);
+the module runs without them. Older history below.
+
+oot-remake-multiplayer integrate-0114 (0.11.4 in the making, protocol 12) by daurosk and contributors,
+https://github.com/daurosk/oot-remake-multiplayer (GPL-3.0, LICENSE). From the source zip of the integrate-0114 branch as of
+2026-11-16 (after v0.11.2 and v0.11.3); merged three ways with Navi's changes on their common base v0.11.1. Before it Navi
+bundled v0.11.1, and before that 83cb91eb6118 (protocol 11): in git history. Its tests/ and .github/ are left out.
+
+The bridge (2026-11-16): Navi's copy talks to daurosk's stock module exactly as another stock module does, so a Navi player
+and players on Longshot or Hookshot who added daurosk's module themselves host and join each other with the same invite
+codes. Only Navi has the module built in; nothing new is asked of the others. The rule that keeps it so: Navi's changes
+send no new message and change no message's layout (protocol 12 as upstream); every Navi feature is local to Navi's game,
+or (New Game+) a value inside an existing message. Checked on this PC with daurosk's stock coop_server and coop_test built
+from the same zip: the stock server took Navi's game (welcomed as player 1), and Navi hosting at New Game+ 1 took two stock
+clients (0 refused, 0 dropped, 0 lost: PASS) that accepted its difficulty.
+
+What Navi takes: the co-op module (hookshot_coop.dll, built from hookshot/ with Visual Studio), the body pack builder
+(tools/puppet_pack), its engine patches (hookshot/patches 0001-0021, fitted into Navi-main: Navi's own text input, menu
+drawing, tab strip, pad and menu-state code kept where both did the same), coop_test (its CMake adds it whenever the
+module is built), netsim and autotest (local testing), docs, and the kit's coop-options.ini and OOTRR.txt (defaults and
+the pinned randomizer release; Navi does not run the kit's scripts).
+
+Navi's changes to this copy:
+- coop_hookshot.cpp: NAVI_COOP_HOST=1 hosts at the game's start (NAVI_COOP_NAME, NAVI_COOP_PASSWORD, NAVI_COOP_PORT,
+  NAVI_COOP_PVP; 4 players) for Navi's Online tab, whose WebRTC link carries each friend's UDP (navi/tunnel.py UdpTunnel).
+- coop_hookshot.cpp, coop_host_menu.{h,cpp}: NAVI_COOP_JOIN=1 and Menu::NaviConnected: the Multiplayer tab says Connected
+  for a game Navi connected at its start (LICHII_COOP_SERVER), and its Leave ends it.
+- coop/host/src/save_transfer.cpp (folder_choice), its header's comment, lichii/hook/coop_save.cpp (2026-11-15): a guest
+  who joins with a save loaded plays the host's save too. It comes in at once and is switched to on the title's menu with
+  no file loaded (pending_step, unchanged), never under a game being played; a chat line tells the guest to go back to
+  the title. Upstream kept such a guest on its own save for the whole session (a friend who joined from the pause menu
+  played his own early save).
+- New Game+ (2026-11-15): lichii/hook/coop_ngplus.{h,cpp} (new; listed in core.cmake): Ganon's death (the game's event
+  request) unlocks the next level and keeps the most hearts; the level is chosen on the Multiplayer tab's Settings page
+  (hookshot/src/coop_pause_menu.{h,cpp}, coop_pause.cpp: a New Game+ row, Request kNgPlus) and kept in coop-ngplus.ini.
+  With a level on, the kept hearts are put in MaxLife and our Link's Life component (coop_objects.{h,cpp} RaiseLinkMax),
+  called from coop_hook.cpp in a session and alone. coop/protocol difficulty.hpp ngplus_difficulty (life +50%, damage
+  +25% a level, within every end) is applied by the server (server/session.{hpp,cpp} set_ngplus, enet_server.hpp's
+  session(), host_service.{hpp,cpp} set_ngplus, called each round by hookshot/src/coop_host_menu.cpp) and alone by
+  lichii/hook/coop_difficulty_game.cpp Now() (a `told` flag: the server's values hold the host's level; alone, ours).
+  (Navi's own fix of the five-value packing was dropped at the 0114 merge: upstream fixed the same, issue 55.)
+
+- Solo or multiplayer saves (2026-11-15): lichii/hook/coop_save.{h,cpp} ChooseSaveSet / MultiplayerSaves and the first
+  title's NoteTitle: the multiplayer saves are <account>-mp beside the solo ones (made as a copy of them the first time;
+  a guest's copy of the host's save is then <account>-mp-coop), switched with the module's remount on the title's menu
+  with no file loaded and no session, kept in coop-saves.ini. hookshot/src/coop_pause_menu.{h,cpp}, coop_pause.cpp: the
+  Settings page's Saves row (Request kSaveSet).
+
+- A joiner's own saves kept safe (2026-11-15): hookshot/src/coop_pause.cpp Join refuses with a save loaded (coop_title
+  AtTitle: quit to the title first), and lichii/hook/coop_save.cpp BackupOwnLocked copies the guest's solo and
+  multiplayer save folders to user/save-backups/<folder>-<time> when it joins (the newest 5 kept). A friend who joined
+  with his solo save loaded had the host's world autosaved into it.
+
+- The late boss death (2026-11-15): lichii/hook/coop_boss_scenes.{h,cpp} (Director: SetLateDeath, Local::boss_alive,
+  Fight our_outro/late_*) and coop_boss_game.cpp (fills boss_alive; LICHII_COOP_BOSS_LATE_DEATH=0 turns it off). A boss
+  another player beat in this session, alive in our game when we come into its room later (the pull-in failed, or we
+  were not in the dungeon), has its death event asked of our game, so our game plays the death and makes our own blue
+  warp; its intro, if it starts, is skipped. Our game not taking it after 5 tries: a chat line, and the boss is fought
+  as before. Upstream left the late player to beat the boss again (sync-coverage D9).
+
+- Custom character models (2026-11-17, branch coop-skins; upstream PR 254, issue 250): tools/puppet_pack/skin.py (new) and
+  build.py (--skin), hookshot/src coop_look_menu, coop_pause_menu, coop_pause, coop_title, coop_i18n (Customize Link's
+  Characters rows), lichii/hook coop_puppet and coop_puppet_config (skin puppets, your own Link's packs), docs/puppet.md.
+  Fitted by hand where Navi's New Game+ and save rows sit beside them. Guide: CUSTOM-MODELS.md in Navi's folder.
+
+Navi's change beside it, in Navi-main (not this copy): host/coop_voice.c opens the microphone on a thread of its own
+(turning voice on froze a game when the open blocked the present thread).
+The rest is as upstream.
+
+Skins' gear (Navi, 2026-11-17, on top of coop-skins): a skin's gear also counts when the mod points an item at another
+model the game already has (Dark Link's sword and shield: tools/puppet_pack/skin.py gear_items with the game's romfs);
+a skin puppet holds the skin's gear copies (lichii/hook/coop_puppet.cpp DressInSkin, PackSkin::gear from
+coop_puppet.json); your own Link wearing a skin also gets its gear packs (skin.self_gear, coop_puppet_config.cpp
+PutSelfSkin puts every coop_skin_self/<id>/*.pack.zs in place). Not yet seen in a two-player game.
+
+Merged 2026-11-17: daurosk's main as released (0.11.4, protocol 12, from the main zip; it holds the crossplay client
+names and the kit's problem reports, Navi's two PRs), three ways from the integrate-0114 base, keeping Navi's changes,
+the skins (coop-skins) and the skin gear. Conflicts: SwitchState (356) beside ModData (492) in the message list; the
+save list re-read (player report 124) beside Navi's save sets, whose switch now goes through RemountLocked so the title
+re-reads the list; blade copies beside the skins in the pack tool (a skin puppet's gear is the skin's first, then the
+blade copies). Skin effects: a skin's own copies of the game's Effect/ and ELink2/ files go into the pack (Dark Link's
+red Demise glow). Upstream's unit tests, run on the merge: 2545 of 2554 pass, server 290 of 290; the 9 others check
+rows Navi adds on purpose (Saves and New Game+ in Settings, the skins' Characters rows) or Navi's join-only-from-the-title
+folder rule.
