@@ -5348,6 +5348,59 @@ TEST_CASE("mods: each player's list is passed on and given to joiners, and share
   CHECK(messages_to<ModSettings>(h, 5).empty());
 }
 
+// Mod data (MOD_DATA 492, issue 250 (1)): the newest value per player, mod and key.
+TEST_CASE("mod data: a value is relayed with the sender's number, given to joiners and dropped when it leaves") {
+  Harness h;
+  h.join(1, "Link");
+  h.join(2, "Zelda");
+  h.clear();
+  const ModData skin{0, "coop", "skin", {1, 2, 3}};
+  h.receive(1, skin, kChannelSession);
+  CHECK(only_message_to<ModData>(h, 2) == ModData{1, "coop", "skin", {1, 2, 3}});
+  CHECK(messages_to<ModData>(h, 1).empty());
+  h.receive(1, ModData{0, "coop", "skin", {4}}, kChannelSession);  // replaces the first
+  h.clear();
+  h.join(3, "Saria");
+  CHECK(messages_to<ModData>(h, 3) == std::vector<ModData>{ModData{1, "coop", "skin", {4}}});
+  h.receive(1, ModData{0, "coop", "skin", {}}, kChannelSession);  // cleared
+  h.clear();
+  h.join(4, "Ruto");
+  CHECK(messages_to<ModData>(h, 4).empty());
+}
+
+// A burst over the second's limit (a game that comes back sends all its values at once) was dropped after ENet
+// acknowledged it: the others kept an old skin for the whole session. Now the newest is held and relayed.
+TEST_CASE("mod data: values over the second's limit are held and relayed the next second, the newest per key") {
+  Harness h;
+  h.join(1, "Link");
+  h.join(2, "Zelda");
+  h.session.tick(h.now);  // opens the first second
+  h.collect();
+  h.clear();
+  for (int i = 0; i < 6; ++i) {
+    h.receive(1, ModData{0, "coop", "k" + std::to_string(i), {1}}, kChannelSession);
+  }
+  CHECK(messages_to<ModData>(h, 2).size() == kModDataPerSecond);
+  CHECK(h.session.stats().mod_data_held == 6 - kModDataPerSecond);
+  CHECK(h.session.stats().mod_data_refused == 0);
+  h.receive(1, ModData{0, "coop", "k5", {2}}, kChannelSession);  // a newer k5 while it is held
+  h.clear();
+  h.now += kSecond;
+  h.session.tick(h.now);
+  h.collect();
+  CHECK(messages_to<ModData>(h, 2) ==
+        std::vector<ModData>{ModData{1, "coop", "k4", {1}}, ModData{1, "coop", "k5", {2}}});
+  // Nothing more is held: the next second relays nothing.
+  h.clear();
+  h.now += kSecond;
+  h.session.tick(h.now);
+  h.collect();
+  CHECK(messages_to<ModData>(h, 2).empty());
+  // A joiner gets every newest value.
+  h.join(3, "Saria");
+  CHECK(messages_to<ModData>(h, 3).size() == 6);
+}
+
 // Issue 151 (fishing-3): a fish goes to the game whose lure is nearest it.
 namespace {
 FishLure lure_at(std::uint16_t cm, std::uint8_t flags = 0) {

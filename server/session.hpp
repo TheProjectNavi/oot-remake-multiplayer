@@ -419,7 +419,8 @@ struct Stats {
   std::uint64_t dbno_revives_dropped = 0;  // mode off, to nobody, or to themselves
   std::uint64_t difficulty_refused = 0;  // DIFFICULTY from a player who does not host
   std::uint64_t mod_settings_refused = 0;  // MOD_SETTINGS from a player who does not host
-  std::uint64_t mod_data_refused = 0;      // MOD_DATA over a limit (too many keys, mods or sends a second)
+  std::uint64_t mod_data_refused = 0;      // MOD_DATA over a limit (too many keys or mods)
+  std::uint64_t mod_data_held = 0;         // MOD_DATA over kModDataPerSecond: held, relayed the next second
   // The Lobby (docs/protocol.md "Lobby"): the host's kicks, bans and mutes.
   std::uint64_t lobby_done = 0;      // LOBBY_ACTIONs carried out
   std::uint64_t lobby_refused = 0;   // LOBBY_ACTION from a player who does not host
@@ -714,9 +715,12 @@ class Session {
     std::optional<protocol::ModList> mods;
     // Its MOD_DATA values, the newest per mod and key, with its number (docs/protocol.md, "Mod data").
     std::vector<protocol::ModData> mod_data;
-    // MOD_DATA taken in the current second (at most kModDataPerSecond).
+    // MOD_DATA relayed in the current second (at most kModDataPerSecond).
     std::uint64_t mod_data_window_us = 0;
     std::uint32_t mod_data_in_window = 0;
+    // MOD_DATA over the second's limit: the newest per mod and key, relayed by tick() as the next seconds open.
+    // ENet acknowledged them, so the game never sends them again: a dropped one left the others with an old value.
+    std::vector<protocol::ModData> mod_data_held;
     // The scene the player is in, from its latest OBJECT_PRESENT or
     // PLAYER_SAMPLE scene; empty while not known.
     std::string scene;

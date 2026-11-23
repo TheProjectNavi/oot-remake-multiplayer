@@ -1078,17 +1078,14 @@ void Session::on_mods(ConnectionId id, Connection& c, Message& message) {
 
 // Mod data (docs/protocol.md, "Mod data"; issue 250 (1)): the sender's own value, kept as the newest per
 // mod and key, passed on to the others; an empty value clears the key. Limits per player: kMaxModDataKeys
-// keys per mod, kMaxModDataMods mods, kModDataPerSecond sends a second. The bytes are never read.
+// keys per mod, kMaxModDataMods mods (more are refused), and kModDataPerSecond relays a second: one over it
+// is kept and held, the newest per mod and key, and tick() relays it when the next second opens. The bytes
+// are never read.
 void Session::on_mod_data(ConnectionId id, Connection& c, Message& message) {
-  if (c.mod_data_in_window >= kModDataPerSecond) {
-    ++stats_.mod_data_refused;
-    return;
-  }
   set_sender(message, c.number);
   const ModData& data = std::get<ModData>(message);
-  auto it = std::find_if(c.mod_data.begin(), c.mod_data.end(), [&](const ModData& d) {
-    return d.mod_id == data.mod_id && d.key == data.key;
-  });
+  const auto same_key = [&](const ModData& d) { return d.mod_id == data.mod_id && d.key == data.key; };
+  auto it = std::find_if(c.mod_data.begin(), c.mod_data.end(), same_key);
   if (data.value.empty()) {
     if (it != c.mod_data.end()) c.mod_data.erase(it);
   } else if (it != c.mod_data.end()) {
@@ -1106,6 +1103,18 @@ void Session::on_mod_data(ConnectionId id, Connection& c, Message& message) {
     }
     c.mod_data.push_back(data);
   }
+  // A held older value of this key is never relayed after this one.
+  auto held = std::find_if(c.mod_data_held.begin(), c.mod_data_held.end(), same_key);
+  if (c.mod_data_in_window >= kModDataPerSecond) {
+    if (held != c.mod_data_held.end()) {
+      *held = data;
+    } else {
+      c.mod_data_held.push_back(data);
+    }
+    ++stats_.mod_data_held;
+    return;
+  }
+  if (held != c.mod_data_held.end()) c.mod_data_held.erase(held);
   ++c.mod_data_in_window;
   send_to_others(id, kChannelSession, message);
   ++stats_.relayed;
@@ -3649,11 +3658,18 @@ void Session::remove_player(ConnectionId id, LeaveReason reason, std::uint64_t n
 
 void Session::tick(std::uint64_t now_us) {
   run_deferred(now_us);  // reliable messages that waited for their sender's rate
-  // MOD_DATA's sends a second: a new count each second.
+  // MOD_DATA's relays a second: a new count each second, and the held ones go out within it.
   for (auto& [id, c] : connections_) {
     if (now_us - c.mod_data_window_us >= 1'000'000) {
       c.mod_data_window_us = now_us;
       c.mod_data_in_window = 0;
+    }
+    while (!c.mod_data_held.empty() && c.mod_data_in_window < kModDataPerSecond && c.state == State::joined) {
+      const Message held = c.mod_data_held.front();
+      c.mod_data_held.erase(c.mod_data_held.begin());
+      ++c.mod_data_in_window;
+      send_to_others(id, kChannelSession, held);
+      ++stats_.relayed;
     }
   }
   // Wrong-password counts whose window and block are both over.

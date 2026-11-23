@@ -650,6 +650,16 @@ Types 490 to 499 (modloader-b; 490 and 491 used). Both on the session channel, f
 
 A build without protocol 11 does not know 490 and 491; all players need the same release.
 
+### Mod data (`MOD_DATA`, issue 250 (1))
+
+Type 492 (in the mods' block, 490 to 499), on the session channel, from any player. A small value a mod gives the other players' copies of the same mod, under a key of its own. Co-op itself uses the mod id `coop`: key `skin` is the custom model a player wears (the skin's id, a 0 byte, then the 32 bytes of the skin pack's SHA-256; empty: Link). Client side: `lichii/hook/coop_mod_data.{h,cpp}`.
+
+- `MOD_DATA` (492): u8 player (0 from the sender, 1 to 16 relayed), str mod id (as in `MOD_LIST`), str key (1 to 32 of `a-z 0-9 _`), u8 length (0 to 64), the value's bytes. An empty value clears the key.
+- The server writes the sender's number, keeps the newest value per player, mod and key, relays it to the others, gives a joiner everyone's values, and drops a player's values when it leaves. It never reads the bytes. Limits per player: 8 keys per mod and 16 mods (more are refused, `mod_data_refused`), and 4 relays a second: a value over that is still kept, and the newest per mod and key is held and relayed when the next second opens (`mod_data_held`). A dropped one was lost for good, since ENet had acknowledged it and the game does not send a value again until it changes.
+- A game sends a value when it changes (at most every 250 ms) and all of its values again after `WELCOME` (a new session or a reconnect).
+
+Added without a version change: an older build refuses type 492 as unknown and plays on; its players see no custom models.
+
 ### Lobby (protocol 11, `LOBBY_ACTION`, `LOBBY_MUTES`, `LOBBY_RESULT`)
 
 Types 510 to 519 (lobby-b; 510 to 512 used). All three on the session channel. The host's moderation from the Lobby tab and the chat commands (play-online.md, "Lobby"); the server carries out every one of them and takes them from the host only, so no game can moderate by itself. A player's own mutes never reach the wire.
