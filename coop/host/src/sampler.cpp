@@ -59,9 +59,36 @@ std::uint8_t status_bits(std::uint8_t previous, const std::optional<PlayerReadin
   }
   const bool menu = play && reading->in_menu.value_or(false);
   set(st::in_menu, menu);
-  set(st::paused, menu && (flags & st::in_cutscene) == 0);
+  // Row 164 follow-up: a world standing still with no menu named (the quick-switch menu) is paused too, not in_menu
+  // (no menu is known to be in front).
+  const bool still = play && reading->world_still;
+  set(st::paused, (menu || still) && (flags & st::in_cutscene) == 0);
   if (reading && reading->dead) set(st::dead, *reading->dead);
   return flags;
+}
+
+bool WorldStill::step(const PlayerReading& reading, std::uint64_t now_us) {
+  const bool event = reading.event_running.value_or(false);
+  if (!reading.animation || reading.animation->rate == 0.0f || event) {
+    // No animation read, a pose held on purpose, or our event (a cutscene may hold Link): not judged.
+    seen_ = false;
+    still_ = false;
+    return false;
+  }
+  const protocol::Animation& a = *reading.animation;
+  const bool moved = !seen_ || a.name != name_ || std::fabs(a.frame - frame_) > kFrameEpsilon ||
+                     distance(reading.position, place_) > kPlaceEpsilon;
+  if (moved) {
+    seen_ = true;
+    name_ = a.name;
+    frame_ = a.frame;
+    place_ = reading.position;
+    changed_us_ = now_us;
+    still_ = false;
+    return false;
+  }
+  still_ = now_us >= changed_us_ && now_us - changed_us_ >= kStillUs;
+  return still_;
 }
 
 void Sampler::reset() {

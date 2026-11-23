@@ -457,7 +457,7 @@ void HostService::stop() {
   const Stats& stats = server_->session().stats();
   say("stopping; relayed " + count(stats.relayed) + ", dropped " + count(stats.dropped()) + ", half-open refused " +
       count(stats.half_open_limited) + ", not allowed " + count(stats.not_allowed));
-  say("host save loads " + count(stats.host_resets) + ", over the rate " + count(stats.rate_limited));
+  say("host save loads " + count(stats.host_resets) + ", over the rate " + count(stats.rate_limited) + " dropped, " + count(stats.rate_deferred) + " waited");
   say("flags relayed " + count(stats.flag_relayed) + ", refused " + count(stats.flag_refused) + ", clashes " +
       count(stats.flag_clashes) + "; join relayed " + count(stats.join_relayed) + ", not there " +
       count(stats.join_not_there) + ", dropped " + count(stats.join_dropped));

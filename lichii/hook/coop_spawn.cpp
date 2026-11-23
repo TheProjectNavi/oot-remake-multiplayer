@@ -381,7 +381,10 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
             if (bounced) {
                 ++m.bounces;
             }
-            m.far = std::max(m.far, Distance(m.position, m.made_position));
+            if (const float d = Distance(m.position, m.made_position); d > m.far) {
+                m.far = d;
+                m.far_at = m.position;
+            }
             m.seen_at = now_us;
             m.missed = 0;
             m.animation = s.animation;
@@ -577,7 +580,7 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
         out.position = m.made_up ? ShotPlace(m, now_us) : m.position;
         send.emplace_back(out);
         flights_.push_back({m.id, m.name, lived, m.far, m.top_speed, out.reason,
-                            m.shot_at.has_value(), m.made_up, m.bounces});
+                            m.shot_at.has_value(), m.made_up, m.bounces, m.far_at});
         it = mine_.erase(it);
     }
     // Addresses the game may give to a new actor later.
@@ -2173,6 +2176,13 @@ public:
                      f.name, f.id.value, static_cast<int>(f.reason), f.lived_us / 1000, f.far,
                      f.top_speed,
                      f.made_up ? ", shot (flight made up)" : f.shot ? ", shot" : "", f.bounces);
+            // Row 164 follow-up (the audit's stun gap): the boomerang and the hookshot come back, so they never end
+            // at what they hit. Their turn (the farthest point) is where they hit or held: a boss copy within reach
+            // of it takes it as our hit, as a seed's end (Barinade's stem and jellyfish, Morpha's nucleus, the Flare
+            // Dancer's core; coop_boss_native.h NoteOwnShotEnd).
+            if (!f.made_up && f.far >= kReturnShotMinFarM && IsReturnShot(f.name)) {
+                CoopBossNative::TheTable().NoteOwnShotEnd(f.far_at);
+            }
             // PvP (coop_pvp_game.h): a shot that hit something or went off, where
             // its remove says it ended, may have reached another player's Link.
             const auto* info = CoopProjectiles::Find(f.name);

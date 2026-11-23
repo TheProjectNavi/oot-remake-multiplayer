@@ -76,6 +76,9 @@ public:
     int SetPassword(const char* password);
     void Leave();
     void Status(HosCoopStatus* out) const;
+    // (Navi) This game was connected by Navi's Online tab at its start (LICHII_COOP_SERVER), not by Join: the tab says
+    // Connected, and its Leave ends it, as after its own Join.
+    void NaviConnected(std::uint16_t port, const std::string& note);
 
     // For tests and the log: the state as HOS_COOP_*.
     int State() const;

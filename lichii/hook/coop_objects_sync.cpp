@@ -440,7 +440,12 @@ const std::vector<PartRule>& PartRules() {
         boss("Enemy_MiddleBoss_DarkLink", {"Enemy_MiddleBoss_DarkLink_EffectLocater"}, kAny);
         boss("Enemy_MiddleBoss_FlareDancer", {"Enemy_MiddleBoss_FlareDancer_FireBody"}, kAny);
         boss("Enemy_MiddleBoss_Poe_Meg", {"Enemy_MiddleBoss_Poe_Meg_Dummy"}, kAny);
-        boss("Enemy_DeadHand", {"Enemy_DeadHand_Hand"}, kSummoned);
+        // Row 232: Dead Hand's hands are no part of him. They are placed enemies of their own (their own AI, BSA and
+        // perception: DeadHand_Hand.action.basicattack grabs the target it perceives, its own game's Link), so as
+        // his parts they followed his owner and only that player was ever grabbed. Each now goes to its nearest
+        // player like any enemy; its grab tells its own game's Dead Hand (OneShotDeadHandHandSendMessage
+        // MessageAppear), who rises for it in his owner's game (his turns pass him between the players). Dead
+        // Hand stays a boss by name (IsBossOrPart).
         // Enemies with a part or a brood. Several of one kind may share a
         // room: a part follows the nearest.
         enemy("Enemy_Dodongo", {"Enemy_Dodongo_Attention"}, 10.0f);
@@ -576,6 +581,7 @@ bool IsBossOrPart(std::string_view name) {
     if (name.starts_with("Enemy_DungeonBoss_") || name.starts_with("Enemy_MiddleBoss_")) {
         return true;
     }
+    if (name == "Enemy_DeadHand") return true;  // (row 232: his hands are plain enemies, no part rule names him)
     for (const PartRule& rule : PartRules()) {
         if (rule.part.boss && rule.part.roots.front() == name) return true;
     }
@@ -740,6 +746,46 @@ bool IsSplitPart(std::string_view name) {
     return name == "Enemy_Floormaster_Little" || name == "Enemy_Floormaster_Little_Truth";
 }
 
+bool IsBattleManager(std::string_view name) {
+    return name == "Enemy_KotakeKoumeBattleManager";
+}
+
+std::string_view GrabbingSummoner(std::string_view name) {
+    // DeadHand_Hand.action.basicattack: the hand grabs the Link its own perception sees (its own game's), and tells
+    // its own game's Dead Hand, who rises by that Link.
+    if (name == "Enemy_DeadHand_Hand") return "Enemy_DeadHand";
+    return {};
+}
+
+bool IsScreamer(std::string_view name) {
+    // Row 230: their packs' RedeadParam (the Gibdo's has the Redead's as its parent).
+    return (name.starts_with("Enemy_ReDead") || name.starts_with("Enemy_Gibdo")) &&
+           name.find("_Dictionary") == std::string_view::npos;
+}
+
+bool IsScream(std::string_view animation, std::int32_t took) {
+    // The scream's AS nodes (AS/Enemy_ReDead.root, Enemy_Gibdo.root: Shout, CryStanding); the bite is Attack_*.
+    // A hit that took no life while it plays none of the bite's is the scream too.
+    if (animation == "Shout" || animation == "CryStanding") return true;
+    return took == 0 && !animation.empty() && !animation.starts_with("Attack");
+}
+
+bool InScreamReach(const proto::Vec3& enemy, const std::optional<proto::Quat>& facing, const proto::Vec3& link) {
+    const float dx = link[0] - enemy[0], dy = link[1] - enemy[1], dz = link[2] - enemy[2];
+    if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz)) return false;
+    const float flat = std::sqrt(dx * dx + dz * dz);
+    if (flat > kScreamReachM || std::fabs(dy) > kScreamHighM) return false;
+    if (!facing || flat < 0.01f) return true;
+    // Its front: the rotation's z axis (column 2), on the ground.
+    const auto& q = *facing;  // x, y, z, w
+    const float fx = 2.0f * (q[0] * q[2] + q[3] * q[1]);
+    const float fz = 1.0f - 2.0f * (q[0] * q[0] + q[1] * q[1]);
+    const float fl = std::sqrt(fx * fx + fz * fz);
+    if (!(fl > 1e-4f)) return true;
+    const float cosine = (fx * dx + fz * dz) / (fl * flat);
+    return cosine >= std::cos(kScreamAngleDeg * 3.14159265f / 180.0f);
+}
+
 std::string_view MinionMaker(std::string_view name) {
     // Made by the boss's own spawn action in the fight (Pack/Actor; the
     // Dodongo's: its AI node ExecuteDungeonBossDodongoSpawnBaby). The parts a
@@ -756,6 +802,12 @@ std::string_view MinionMaker(std::string_view name) {
     // MinionOwner is 0 and nothing changes.
     if (name == "Enemy_DungeonBoss_Gohma_Egg") return "Enemy_DungeonBoss_Gohma";
     if (name == "Enemy_BabyDodongo") return "Enemy_DungeonBoss_Dodongo";
+    // Row 231 (Geno's survey): Meg's decoys (no BSA, MaxLife 1, their own AI that goes to the seat Meg's message
+    // names: ExecutePoeMegMessageReceiver, MegDummy_SeatId) are made anew each cycle by each game's Meg, which rolls
+    // its own layout, and got ids by order, so three made in one frame matched differently between games. Only
+    // her owner's are kept and shared; a copy game makes those (as Gohma's eggs). A copy's Meg that remakes them
+    // in a loop is logged (kMinionLoopMax), still deleted.
+    if (name == "Enemy_MiddleBoss_Poe_Meg_Dummy") return "Enemy_MiddleBoss_Poe_Meg";
     return {};
 }
 
@@ -1201,6 +1253,9 @@ void Sync::Reset() {
     game_deletes_.clear();
     bound_.clear();
     refused_.clear();
+    minion_refusals_.clear();
+    minion_loop_.clear();
+    grabbing_.clear();
     decider_ = 0;
     // next_key_ and made_counter_ go on: the director never makes a key
     // twice, and the server keeps made ids until they are removed.
@@ -2763,6 +2818,18 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
                 if (!waiting) {
                     if (!refused_.contains(s->address)) {
                         ++refused_count_;
+                        // Row 231: a copy's boss that remakes what we delete, again and again (Meg's decoys: a
+                        // copy's Meg may make them anew when hers are gone), is still refused: matching ours by
+                        // order again would bring back row 231's different layouts and show the owner's beside
+                        // ours. The loop is logged once a scene per name, for the run to show whether it happens.
+                        auto& times = minion_refusals_[s->name];
+                        times.push_back(now_us);
+                        while (!times.empty() && now_us - times.front() > kMinionLoopUs) times.pop_front();
+                        if (times.size() > kMinionLoopMax && minion_loop_.insert(s->name).second) {
+                            notes_.emplace_back("minions: our copy of " + std::string(maker) + " made " +
+                                                std::to_string(times.size()) + " " + s->name +
+                                                " within 3 s (a loop): still deleted, the owner's kept");
+                        }
                     }
                     refused.insert(s->address);
                 }
@@ -2991,6 +3058,30 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
             send.emplace_back(std::move(spawn));
             o.announced = true;
         }
+        // Row 230: our own Link was frozen by this Redead's or Gibdo's scream (NoteOurLinkHit): its samples carry
+        // the hit's kind (ObjectStrike), so each other game whose Link is in the scream's reach freezes its own.
+        if (link_hit_ && link_hit_->attacker == address) {
+            const LinkHit hit = *std::exchange(link_hit_, std::nullopt);
+            const std::string anim = o.animation ? o.animation->name : std::string();
+            if (!IsScreamer(o.name)) {
+                // (not a screamer: nothing to share)
+            } else if (!known) {
+                notes_.emplace_back("scream: our Link took a hit from " + o.name + " ('" + anim +
+                                    "'): no owner known (alone, or not yet given), nothing to share");
+            } else if (owner->second.player != self) {
+                notes_.emplace_back("scream: our Link took a hit from a copy of " + o.name + " ('" + anim +
+                                    "'): not ours, its owner's game shares its own");
+            } else if (!IsScream(anim, hit.took)) {
+                notes_.emplace_back("scream: our Link took a hit from our " + o.name + " playing '" + anim + "' (" +
+                                    std::to_string(hit.took) + " quarters): not a scream, not shared");
+            } else {
+                o.strike_out = proto::ObjectStrike{++o.strike_seq, hit.kind};
+                o.strike_show_until = now_us + kHitShowUs;
+                o.sent_once = false;  // at once, not at the next sample
+                notes_.emplace_back("scream: our " + o.name + " froze our Link ('" + anim + "', " +
+                                    std::to_string(hit.took) + " quarters): shared for the Links in its reach");
+            }
+        }
         // The owner's samples.
         if (known && owner->second.player == self &&
             (!o.sent_once || now_us - o.sent_at >= kSampleEveryUs)) {
@@ -3015,6 +3106,9 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
                 if (o.hit_out && now_us < o.hit_show_until) {
                     sample.state.hit = o.hit_out;  // protocol 14: the hit our game took, for every copy
                 }
+                if (o.strike_out && now_us < o.strike_show_until) {
+                    sample.state.strike = o.strike_out;  // row 230: its scream froze our Link
+                }
                 send.emplace_back(sample);
                 o.sent_at = now_us;
                 o.sent_once = true;
@@ -3029,6 +3123,7 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
             }
         }
     }
+    link_hit_.reset();  // row 230: a hit from an actor not shared (not in the walk) is not kept for a later one
 
     // churn-b: an away object that came back goes on with its owner; one
     // still off the walk after kAwayKeepUs is gone (left), its owner forgotten.
@@ -3114,6 +3209,29 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
 
     std::vector<proto::ObjectPresence> present;
     present.reserve(objects_.size() + away_.size());
+    // Row 232: a summoned piece we own in its attack holds our own Link: its boss is wanted here.
+    std::set<std::string, std::less<>> grabbing;
+    for (const auto& [address, o] : objects_) {
+        const std::string_view boss = GrabbingSummoner(o.name);
+        const auto owner = owners_.find(o.id);
+        if (!boss.empty() && o.attacking.value_or(false) && now_seen.contains(address) && owner != owners_.end() &&
+            owner->second.player == self) {
+            grabbing.insert(std::string(boss));
+        }
+    }
+    if (grabbing != grabbing_) {
+        for (const std::string& boss : grabbing) {
+            if (!grabbing_.contains(boss)) {
+                notes_.emplace_back("grab: our " + boss + "'s piece holds our Link: " + boss + " wanted here");
+            }
+        }
+        for (const std::string& boss : grabbing_) {
+            if (!grabbing.contains(boss)) {
+                notes_.emplace_back("grab: no piece of " + boss + " holds our Link now");
+            }
+        }
+        grabbing_ = grabbing;
+    }
     std::vector<proto::FishLureEntry> fish;  // issue 151: FISH_LURE
     for (auto& [address, o] : objects_) {
         if (o.dead_said) {
@@ -3256,6 +3374,12 @@ void Sync::Tick(const std::string& scene, std::uint8_t self, std::uint64_t now_u
         }
         if (takes_turns_ && IsBossOrPart(o.name)) {
             flags |= proto::object_presence::takes_turns;  // boss turns: this build reads attacks
+        }
+        if (IsBattleManager(o.name)) {
+            flags |= proto::object_presence::battle_manager;  // row 222: its group moves only from an unfit owner
+        }
+        if (grabbing.contains(o.name)) {
+            flags |= proto::object_presence::grabbed_here;  // row 232: his piece holds our Link: he is wanted here
         }
         if (!bound_.contains(address) && OwnLogicEncounter(o.name, scene_)) {
             flags |= proto::object_presence::own_logic;  // row 212: our cell logic made it: it stays with such a game
@@ -3922,6 +4046,25 @@ void Sync::Apply(std::uint8_t self, std::uint64_t now_us, std::vector<proto::Mes
                     if (const auto& a = o->received.back().animation; o->play_frame && a) {
                         o->frame_loop.See(a->name, a->frame);  // coop_npc_anim.h
                     }
+                }
+            }
+            if (sample->state.strike && sample->state.strike->seq != o->strike_seq_in) {
+                // Row 230: the owner's Link was frozen by this one's scream: ours too when it stands in its reach.
+                o->strike_seq_in = sample->state.strike->seq;
+                const proto::Vec3 at =
+                    sample->state.position && Finite(*sample->state.position) ? *sample->state.position : o->position;
+                const std::optional<proto::Quat> facing = sample->state.rotation;
+                if (!IsScreamer(o->name)) {
+                    // (only a Redead's or Gibdo's)
+                } else if (!player_) {
+                    notes_.emplace_back("scream: the owner's " + o->name + " froze its Link; ours not seen: not frozen");
+                } else if (InScreamReach(at, facing, *player_)) {
+                    strikes_.push_back({o->address, at, *player_, sample->state.strike->kind});
+                    notes_.emplace_back("scream: the owner's " + o->name + " froze its Link; ours is in its reach (" +
+                                        std::to_string(Distance(at, *player_)) + " m): frozen here too");
+                } else {
+                    notes_.emplace_back("scream: the owner's " + o->name + " froze its Link; ours is out of its reach (" +
+                                        std::to_string(Distance(at, *player_)) + " m)");
                 }
             }
             if (!sample->state.life || !o->life) {

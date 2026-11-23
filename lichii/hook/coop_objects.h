@@ -51,6 +51,12 @@ void SetMaxLifeLowerTo(std::optional<std::int32_t> quarters);
 // container, whose pickup fills them: CoopBossScenes::Actions::refill). Any thread.
 void AskRefill();
 
+// (Navi) New Game+ (coop_ngplus.h): our Link's own Life component (`actor`:
+// PlayerReader::find_player_actor) raised to `quarters` most, never lowered,
+// where the hearts are drawn from. Alone too (no object walk then). The max
+// before the raise, or nothing (not found, or already that high).
+std::optional<std::int32_t> RaiseLinkMax(Core::System& system, std::uint64_t actor, std::int32_t quarters);
+
 // Our own Link's hearts as the object walk last read them from his Life
 // component, in quarter hearts (4 = one heart): now and the most. Nothing
 // when no walk read them in the last 2 s (not connected, no Link loaded,

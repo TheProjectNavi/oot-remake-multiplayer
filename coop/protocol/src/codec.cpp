@@ -677,6 +677,7 @@ Error check_object_state(const ObjectState& s) {
     }
   }
   if (s.hit && s.hit->seq == 0) return Error::bad_value;  // (seqs count from 1)
+  if (s.strike && s.strike->seq == 0) return Error::bad_value;
   if (s.bsa) {
     const auto finite = [](const BossAction& a) {
       for (const auto& p : a.places) {
@@ -786,6 +787,12 @@ void write_object_state(const ObjectState& s, Writer& w) {
     component(ObjectComponent::hit, [&] {
       w.u32(s.hit->seq);
       for (std::uint32_t word : s.hit->record) w.u32(word);
+    });
+  }
+  if (s.strike) {
+    component(ObjectComponent::strike, [&] {
+      w.u32(s.strike->seq);
+      for (std::uint32_t word : s.strike->kind) w.u32(word);
     });
   }
 }
@@ -1501,6 +1508,13 @@ Error decode_component(ObjectComponent id, Reader& c, ObjectState& s, bool& know
       COOP_READ(c.u32(h.seq));
       if (h.seq == 0) return Error::bad_value;
       for (std::uint32_t& word : h.record) COOP_READ(c.u32(word));
+      return Error::none;
+    }
+    case ObjectComponent::strike: {
+      ObjectStrike& k = s.strike.emplace();
+      COOP_READ(c.u32(k.seq));
+      if (k.seq == 0) return Error::bad_value;
+      for (std::uint32_t& word : k.kind) COOP_READ(c.u32(word));
       return Error::none;
     }
     case ObjectComponent::bsa: {
@@ -2258,6 +2272,47 @@ Error check_mod_settings(const ModSettings& m) {
     }
   }
   return Error::none;
+}
+
+bool valid_mod_data_key(std::string_view key) {
+  if (key.empty() || key.size() > kMaxModDataKeyChars) return false;
+  for (const char c : key) {
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+  }
+  return true;
+}
+
+Error check_mod_data(const ModData& m) {
+  if (!valid_player_or_self(m.player_number) || !valid_mod_id(m.mod_id) || !valid_mod_data_key(m.key) ||
+      m.value.size() > kMaxModDataValueBytes) {
+    return Error::bad_value;
+  }
+  return Error::none;
+}
+
+// MOD_DATA: u8 player, str mod id, str key, u8 length, the value's bytes.
+Error encode_body(const ModData& m, Writer& w) {
+  COOP_TRY(check_mod_data(m));
+  w.u8(m.player_number);
+  w.str(m.mod_id);
+  w.str(m.key);
+  w.u8(static_cast<std::uint8_t>(m.value.size()));
+  if (!m.value.empty()) w.bytes(m.value.data(), m.value.size());
+  return Error::none;
+}
+
+Error decode_body(Reader& r, ModData& m) {
+  m = ModData{};
+  std::uint8_t length = 0;
+  COOP_READ(r.u8(m.player_number));
+  COOP_TRY(r.str(m.mod_id, kMaxModIdChars));
+  COOP_TRY(r.str(m.key, kMaxModDataKeyChars));
+  COOP_READ(r.u8(length));
+  if (length > kMaxModDataValueBytes) return Error::bad_value;
+  std::span<const std::uint8_t> bytes;
+  COOP_READ(r.take(length, bytes));
+  m.value.assign(bytes.begin(), bytes.end());
+  return check_mod_data(m);
 }
 
 // Split screen (docs/protocol.md, "Local players").
@@ -3356,6 +3411,7 @@ MessageType type_of(const Message& message) {
       MessageType::lift_share,
       MessageType::pvp_strike,  MessageType::pvp_result,  MessageType::pvp_native,
       MessageType::boss_alive,
+      MessageType::mod_data,
   };
   static_assert(std::size(kTypes) == std::variant_size_v<Message>);
   return kTypes[message.index()];
@@ -3462,6 +3518,7 @@ bool allowed_on_channel(MessageType type, std::uint8_t channel) {
     case MessageType::local_leave:
     case MessageType::local_message:
     case MessageType::player_look:
+    case MessageType::mod_data:
     case MessageType::link_sound:
     case MessageType::boss_scene:
     case MessageType::boss_heart:
@@ -3604,6 +3661,7 @@ bool may_send(Sender from, MessageType type) {
     case MessageType::dbno_revive:
     case MessageType::dbno_threat:
     case MessageType::player_look:
+    case MessageType::mod_data:
     case MessageType::link_sound:
     case MessageType::boss_scene:
     case MessageType::boss_heart:
@@ -3660,7 +3718,7 @@ auto* player_field(M& message) {
                       std::is_same_v<T, BossAlive> || std::is_same_v<T, PlayerLook> || std::is_same_v<T, LiftAsk> ||
                       std::is_same_v<T, LiftAnswer> || std::is_same_v<T, LiftPlace> ||
                       std::is_same_v<T, PvpStrike> || std::is_same_v<T, PvpResult> ||
-                      std::is_same_v<T, PvpNative>) {
+                      std::is_same_v<T, PvpNative> || std::is_same_v<T, ModData>) {
           field = &m.player_number;
         }
       },
@@ -3762,6 +3820,7 @@ Error decode(std::span<const std::uint8_t> bytes, Message& out) {
     case MessageType::ocarina_note: return decode_as<OcarinaNote>(body, out);
     case MessageType::link_sound: return decode_as<LinkSound>(body, out);
     case MessageType::player_look: return decode_as<PlayerLook>(body, out);
+    case MessageType::mod_data: return decode_as<ModData>(body, out);
     case MessageType::save_ask: return decode_as<SaveAsk>(body, out);
     case MessageType::save_part: return decode_as<SavePart>(body, out);
     case MessageType::pvp_mode: return decode_as<PvpMode>(body, out);

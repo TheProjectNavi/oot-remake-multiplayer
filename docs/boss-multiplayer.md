@@ -15,6 +15,7 @@ the plan; [dungeons-boss.md](dungeons-boss.md) says how the sync works today.
 - **Never stuck on a player who cannot fight** (2026-11-21, every enemy): a boss, or any enemy in its fight, leaves
   an owner who goes down or dies at once and one paused after 2 s (`fight_owner_dead_us`, `fight_owner_paused_us`;
   out of a fight the old 10 s and 6 s), for a player up and playing. With nobody up it stays where it is.
+- **Nor on a player held in a cutscene of their own** (row 164 follow-up): an item get, Navi's talk or a late intro of their own game holds the owner's Link, and the boss's AI (which fights that Link alone) stood with it on every screen. A boss whose owner has been `in_cutscene` for 3 s (`fight_owner_cutscene_us`; 0 off) goes to a player up, playing and in no cutscene. Never while the boss itself plays an event or its death or is at life 0 (its own intro, phase change or death: every game is in that one, the owner's AI is in it on purpose), and never to a game in a cutscene too. Stat `boss_from_cutscene`. Tests: `session_test.cpp` (row 164 follow-up).
 - **Plain enemies can take turns too, OFF by default** (`enemy_turns`): the same rule as a boss's, between its
   attacks, among the players within 12 m of it (`enemy_turn_m`). It stays off: a plain enemy's AI chases only its
   owner's Link, so every turn walks it over to the other player and back (the shuttle of report 138, docs/objects.md
@@ -154,26 +155,45 @@ no other actor reads its state only at load (the turning floor's fix fits nowher
 room under a player (the hallway block fits nowhere else); the water level stays a change for everyone.
 
 Still to design (need a game run first):
-- Redead and Gibdo: the scream freezes only the owner's Link; every player in its range should freeze in their own
-  game. The freeze is the Redead's own (`Enemy_ReDead_Shout`, `ParalysisEnableDistMin/Max`, `ParalysisEnableAngleDiff`
-  and their `InTown` values). Planned: if the freeze reaches the owner's Link as a hit (its kind words), each game
-  in range gives its own Link that hit (`HurtOurLinkNative`, as PvP does). Probe (debug walk, `coop: scream:`
-  lines: every Redead/Gibdo animation change and every hit our Link takes with its kind words): run `st-redead`
-  (Graveyard_Adult, both players 4 m from the three Redeads at 113 97 9) saw no scream in 50 s: they stayed in
-  `Wait`/`Sit`. What starts the scream (time of day, the player moving or looking) is still to find. Not for this
-  release.
-- Meg (Forest Temple): her decoys (`Enemy_MiddleBoss_Poe_Meg_Dummy`, no BSA, MaxLife 1, own AI) are made anew
-  each cycle and get ids by order (`SceneSpawnId`), so three made in one frame can match differently between games;
-  each game also rolls its own layout at Appear, and a copy's decoy AI fights the Mover. Likely cause: per-game
-  layouts plus decoys matched by order (not missing messages: a copy's Meg runs her action modules). Smallest fix,
-  medium confidence: `MinionMaker` maps the decoy to Meg, so only Meg's owner keeps decoys and shares them (as
-  Gohma's eggs); risk: the copy's Meg remakes them in a loop. Fuller: match by `MegDummy_SeatId` (blackboard layout
-  to find live). First step: log decoy ids, orders and places per game in a two-game run.
-- Dead Hand: its hands are boss parts of Dead Hand (`PartRules` kSummoned), so they follow his owner and grab only
-  that player. Smallest fix, medium confidence: drop that rule and keep Dead Hand a boss by name in
-  `IsBossOrPart`; each hand then goes to its nearest player. Risk: a hand's grab sends `MessageAppear` to its own
-  game's Dead Hand, held in a game that does not own him, so he may not rise there. Later: hand Dead Hand to a
-  grabbing hand's owner (a summoner link the server does not follow).
+- Redead and Gibdo (row 230, enemies-01110): the scream froze only the owner's Link. Read from the romfs: the
+  scream is the Redead's own sensor attack (`Redead.action.sleepparalysis`: `ExecuteSensorHitSetupAttack`, AS node
+  `Shout`/`CryStanding`) on its AI's target, which is only its own game's Link; the player takes it as a hit and
+  runs its own `SleepParalysis` reaction (Player ConditionParam: 210 frames, 120 invincible). Its reach is the
+  Redead's RedeadParam: `ParalysisEnableDistMax` 5.5 m, `ParalysisEnableAngleDiff` 45 degrees (the same in town;
+  the Gibdo's param has the Redead's as its parent). Now: the owner's game reads each new hit on its own Link (its
+  Life's last hit id) with its attacker; a hit from its own Redead/Gibdo while that one plays the scream (or one
+  that took no life outside the bite's `Attack_*`) goes in that enemy's samples as object component 22 `strike`
+  (its kind words). Each other game whose Link stands in that reach of its copy gives its own Link that hit with
+  no life (`HurtOurLinkNative`, as PvP's no-life kinds). Log lines `coop: objects: scream: ...` on both sides.
+  The bite is not shared (the other Links are not held). Unit tests only; to check in a game: B within 5 m in
+  front of a Redead A owns, A walks up until it screams: both Links freeze. (Geno's probe saw no scream in 50 s at
+  4 m: the scream needs the Redead to have noticed its target and face it within 45 degrees.)
+- Meg (Forest Temple; row 231, enemies-01110): her decoys (`Enemy_MiddleBoss_Poe_Meg_Dummy`, no BSA, MaxLife 1,
+  their own AI that goes to the seat Meg's message names: `ExecutePoeMegMessageReceiver`, `MegDummy_SeatId`) are
+  made anew each cycle by each game's Meg, which rolls its own layout, and got ids by order (`SceneSpawnId`), so
+  three made in one frame matched differently between games. Now (Geno's MinionMaker idea) `MinionMaker` maps the
+  decoy to Meg: only her owner's game keeps its decoys and shares them (made ids, as Gohma's eggs); a copy game
+  deletes its own and makes the owner's, so every game shows the owner's layout. His worry (a copy's Meg remaking
+  them in a loop) is logged for every boss minion: more than `kMinionLoopMax` (12) of one minion deleted within
+  3 s in one game gives one `minions: ... (a loop): still deleted, the owner's kept` line a scene; ours stay
+  deleted (matching them by order again would bring row 231 back and show the owner's decoys beside ours). A copy's
+  decoy made on the seat of an owner's decoy being made waits up to `kCreateWaitUs` (it may be the director's copy)
+  and goes once the copy is bound. A turn mid-cycle: the decoys made so far stay their maker's (made ids); those
+  made from then on are the new owner's to share. Unit tests only; to check in a game: B watches A's Meg split: the same four
+  places on both screens; no `a loop` line.
+- Dead Hand (row 232, enemies-01110): his hands were boss parts of him (`PartRules` kSummoned), so they followed
+  his owner and grabbed only that player. They are placed enemies with their own AI, BSA and perception
+  (`DeadHand_Hand.action.basicattack` grabs the target it perceives: its own game's Link), so they are plain
+  enemies now: each goes to its nearest player, whose game grabs that player. Dead Hand stays a boss by name
+  (`IsBossOrPart`). A grab tells its own game's Dead Hand (`OneShotDeadHandHandSendMessage` `MessageAppear`); he
+  rises for it where he is owned. A game whose own hand holds its own Link lists Dead Hand with
+  `object_presence::grabbed_here` (a `grab:` log line), and the server hands him to that game once his attack in
+  his owner's game has ended (`Session::grab_owner`, `boss grab:` server line, `boss_to_grabbed`), unless his
+  owner's Link is held too (then his turns pass him on). The reverse (he sinks or is hit, and his hands let go): his
+  own game's AI tells its own hands; a hand owned by another game is a copy there and follows its owner's motion, so
+  the hand that holds a Link is in the same game as Dead Hand once the grab rule has moved him, and his own message
+  reaches it. Unit tests only;
+  to check in a game: A and B each near a different hand: both grabbed; Dead Hand rises for each in turn.
 - Water Temple and others: placements whose `Presence.FlagName` is a shared flag that changes during play (the
   water level's planes and waterfall, the Shadow tower's pillar and rubble, Bottom of the Well's water, the Forest
   Temple's room 7 water and elevator, Ice Cavern pots, a Jabu-Jabu air wall) are probably read only at a scene

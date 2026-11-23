@@ -40,14 +40,16 @@ void Sharer::Forget(std::uint8_t player) {
     for (auto& kv : states_) kv.second.remote.erase(player);
 }
 
-bool Sharer::RemoteOn(State& s, std::uint64_t now_ms) {
+bool Sharer::RemoteOn(State& s, std::uint64_t now_ms, const std::set<std::uint8_t>& away) {
     std::erase_if(s.remote, [now_ms](const auto& r) { return !r.second.on || now_ms > r.second.until_ms; });
-    return !s.remote.empty();
+    // Row 164 follow-up: a presser whose world stands still is kept (its press comes back with it) but not held: its
+    // switch's own timer stands still, so holding ours would keep the door or mover open the whole pause.
+    return std::any_of(s.remote.begin(), s.remote.end(), [&away](const auto& r) { return !away.contains(r.first); });
 }
 
 std::vector<Hold> Sharer::Tick(const std::string& scene, const std::vector<Seen>& seen, bool others_here,
                                std::uint64_t now_ms, std::vector<coop::protocol::SwitchState>& send,
-                               std::vector<std::string>& notes) {
+                               std::vector<std::string>& notes, const std::set<std::uint8_t>& away) {
     std::lock_guard lock(mutex_);
     if (scene != scene_) {
         // A new scene: nothing of the old one is held or owed. A press of this scene received before our first walk
@@ -74,7 +76,7 @@ std::vector<Hold> Sharer::Tick(const std::string& scene, const std::vector<Seen>
         }
         s.seen_tick = tick_;
         const bool armed = v.armed && *s.load_on;
-        const bool remote_on = RemoteOn(s, now_ms);
+        const bool remote_on = RemoteOn(s, now_ms, away);
         // g3-objects: a plug that also raises our event asker is held only once that asker cannot fire (armed);
         // until then another player's press is not ours to hold, and our own plug is still our own.
         const bool remote = remote_on && armed;

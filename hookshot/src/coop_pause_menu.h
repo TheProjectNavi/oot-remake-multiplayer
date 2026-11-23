@@ -92,7 +92,8 @@ struct Request {
                       // it (CoopHook::SendChat), so a host row and the command are one path and the chat line says
                       // what changed; the server takes it from the host only.
                       kChat,
-                      kDifficulty };   // kDifficulty: `text` the host's new choice (CoopDifficulty::FormatChoice)
+                      kDifficulty,     // kDifficulty: `text` the host's new choice (CoopDifficulty::FormatChoice)
+                      kCharacter };   // (Navi) kCharacter: character() is the Customize page's new pick (a custom model)
     Kind kind = Kind::kHost;
     std::string text;
 };
@@ -209,7 +210,7 @@ public:
     void SetDifficulty(const DifficultyState& state, int players);
     // Character Select (coop_char_colours.h ShownCharacter): this game shows a character, not Link, so the
     // Customize page says Link's colours wait for Link (#308's live display; the character keeps its own).
-    void SetCharacter(bool picked) { character_ = picked; }
+    void SetCharacter(bool picked) { character_note_ = picked; }
     // Character Select's code is in the game (coop_pause_tab.h SnailCodeBuiltIn): his Customize screen, with co-op's
     // rows (coop_snail_custom.h), is the one home of Link's look (the owner, 0.11.9: "one home per thing"). The Customize
     // page keeps Your name and says where the colours are; the main page's Customize Link row says it too.
@@ -256,6 +257,13 @@ public:
     // on the other pages.
     std::vector<CoopLookMenu::Shape> Picture() const;
     const CoopLook::Look& look() const { return look_; }
+    // The Customize page's Characters rows: the pack's custom models and the
+    // pick worn now (coop_look_menu.h).
+    void SetCharacters(std::vector<CoopLookMenu::Character> custom, CoopLookMenu::CharacterPick pick) {
+        characters_ = std::move(custom);
+        character_ = std::move(pick);
+    }
+    const CoopLookMenu::CharacterPick& character() const { return character_; }
 
     Page page() const { return page_; }
     std::size_t selected() const { return selected_; }
@@ -335,7 +343,7 @@ private:
     coop::protocol::DifficultyChoice DifficultyShown() const;
     coop::protocol::DifficultyValues DifficultyValuesShown() const;
     void DifficultyLines(std::vector<Line>& out) const;
-    bool character_ = false;  // SetCharacter
+    bool character_note_ = false;  // SetCharacter
     bool snail_home_ = false;  // SetSnailHome
     bool title_ = false;      // SetTitle
     std::string picked_;      // the title: the game picked on the list that asks for a password ("": none)
@@ -355,6 +363,8 @@ private:
     bool customize_name_ = false;
     std::size_t CustomizeFirst() const;   // the parts' list's first row that can be selected
     CoopLook::Look look_;
+    std::vector<CoopLookMenu::Character> characters_;
+    CoopLookMenu::CharacterPick character_;
     void TakeCustomize();
 };
 

@@ -112,6 +112,8 @@
 #include "coop_char_colours.h"
 #include "coop_charsel_tidy.h"
 #include "coop_look_share.h"
+#include "coop_mod_data.h"
+#include "coop_mod_data.h"
 #include "coop_ocarina_sound.h"
 #include "coop_pose.h"
 #include "coop_puppet.h"
@@ -802,6 +804,7 @@ public:
         CoopSave::OnEvent(event, client);  // the host's save for the guests (issue 167)
         CoopHud::OnEvent(event);  // the others' hearts for the HUD (PLAYER_LIFE)
         CoopLookShare::OnEvent(event, client);  // looks of several parts (PLAYER_LOOK, coop_look_share.h)
+        CoopModData::OnEvent(event, client);  // mods' small values, our skin (MOD_DATA, coop_mod_data.h)
         if (event.kind == coop::net::EventKind::message) {  // deku-dungeon-2
             if (const auto* e = std::get_if<coop::protocol::DungeonEvent>(&event.message)) {
                 std::lock_guard lock(dungeon_events_mutex_);
@@ -1860,6 +1863,11 @@ public:
         }
         // Our look of several parts, chosen in the Multiplayer tab (coop_look_share.h).
         CoopLookShare::Frame(report.connected ? session_.get() : nullptr);
+        // Our mod data, the skin we wear among it (coop_mod_data.h).
+        CoopModData::Frame(report.connected ? session_.get() : nullptr,
+                           static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                          std::chrono::steady_clock::now().time_since_epoch())
+                                                          .count()));
         // The sounds the game starts on our own Link, for the other games (coop_link_sound.h).
         CoopLinkSound::Frame(report.connected ? session_.get() : nullptr,
                              static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1882,7 +1890,9 @@ public:
         if (!reading) CoopTime::Loading(report.server_now_us);  // issue 159: a reload, a death
         CoopTime::Frame(system, view.game ? base_ : 0, report.connected ? session_.get() : nullptr,
                         report.server_now_us,
-                        reading && reading->event_running.value_or(false));  // issue 192: no nudge in a cutscene
+                        reading && reading->event_running.value_or(false),  // issue 192: no nudge in a cutscene
+                        // Row 164 follow-up: our game paused (a menu in front, no event), for the host's catch-up.
+                        reading && reading->in_menu.value_or(false) && !reading->event_running.value_or(false));
         // Boss rooms together (docs/dungeons-boss.md). Issue 148: the room's
         // "shut in" flag says when we are past its door.
         std::optional<bool> boss_shut_in;
@@ -2357,6 +2367,22 @@ private:
                 reading->in_menu = menu->menu_open;
             }
 #endif
+            // Row 164 follow-up: our world standing still with no menu named (the quick-switch item menu) is
+            // paused too (coop/host/sampler.hpp WorldStill). LICHII_COOP_STILL=0 turns it off.
+            static const bool still_on = !(std::getenv("LICHII_COOP_STILL") != nullptr &&
+                                           std::string_view(std::getenv("LICHII_COOP_STILL")) == "0");
+            if (still_on) {
+                const bool was = world_still_.still();
+                reading->world_still = world_still_.step(*reading, CoopEvery::NowUs());
+                if (reading->world_still != was && !reading->in_menu.value_or(false)) {
+                    LOG_INFO(Core, "coop: status: our world {} (Link's '{}' at frame {:.1f}): {}",
+                             reading->world_still ? "stands still with no menu named" : "runs again",
+                             reading->animation ? reading->animation->name : std::string(),
+                             reading->animation ? reading->animation->frame : 0.0f,
+                             reading->world_still ? "paused for the others (the quick-switch menu or a stall)"
+                                                  : "playing");
+                }
+            }
         }
         return reading;
     }
@@ -2719,6 +2745,7 @@ private:
     bool queue_sizes_logged_ = false;  // the game's flag queue sizes, logged once
     // Kept across frames: a drawn sword shows in the game's memory for a moment only.
     coop::host::PlayerReader::DrawnState drawn_state_{};
+    coop::host::WorldStill world_still_;  // row 164 follow-up: our world standing still with no menu named
     bool sharing_ = false;  // a flag list is shared; set by Begin
     CoopBoss::StaleBossFlags stale_boss_;  // issue 148: shut boss doors from older builds
     bool boss_alive_due_ = false;          // row 159: BOSS_ALIVE to send after our own save load (host)

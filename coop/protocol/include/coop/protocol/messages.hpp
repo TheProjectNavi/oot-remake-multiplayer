@@ -181,6 +181,7 @@ enum class MessageType : std::uint16_t {
   voice_frame = 420,  // 420 to 424: proximity voice chat (docs/protocol.md, "Voice")
   mod_list = 490,  // 490 to 499: mods (docs/protocol.md, "Mods")
   mod_settings = 491,
+  mod_data = 492,
   lobby_action = 510,  // 510 to 519: the Lobby's host moderation (docs/protocol.md, "Lobby")
   lobby_mutes = 511,
   lobby_result = 512,
@@ -854,6 +855,7 @@ enum class ObjectComponent : std::uint16_t {
   slots = 19,  // protocol 10, issue 150: a boss's other AS slots (below)
   bsa = 20,    // native boss sync: a boss's brain and action verbs (BossBsa below)
   hit = 21,    // protocol 14: the hit the owner's game took (ObjectHit below)
+  strike = 22,  // row 230: a Redead's or Gibdo's scream that froze the owner's Link (ObjectStrike below)
 };
 
 struct ObjectLife {
@@ -951,6 +953,20 @@ struct ObjectHit {
   bool operator==(const ObjectHit&) const = default;
 };
 
+// Component 22 (row 230): the scream of a Redead or Gibdo that froze its owner's own Link (the game's
+// Redead.action.sleepparalysis module sets up a sensor attack on its target: the owner's Link only, as a
+// game's AI never targets a puppet). The kind words of the hit the owner's Link took (Life +0x250 up to the
+// hit's place, as PvpKind below: plain values). Sent in its samples for a short while (they may be lost); seq
+// is the owner's own count of them, from 1. Each other game whose own Link stands in the scream's reach
+// (RedeadParam: within 5.5 m and 45 degrees of the enemy's front) takes that hit on its own Link once.
+// An older reader skips it by its length: no version change.
+inline constexpr std::size_t kStrikeKindWords = 11;
+struct ObjectStrike {
+  std::uint32_t seq = 0;
+  std::array<std::uint32_t, kStrikeKindWords> kind{};
+  bool operator==(const ObjectStrike&) const = default;
+};
+
 // The components of OBJECT_SAMPLE, OBJECT_SPAWN and HANDOVER_STATE. time is
 // always sent; the others when the sender has them. Floats must be finite.
 struct ObjectState {
@@ -965,6 +981,7 @@ struct ObjectState {
   std::optional<std::vector<SlotAnimation>> slots;  // issue 150: bosses only
   std::optional<BossBsa> bsa;                       // native boss sync: bosses only
   std::optional<ObjectHit> hit;                     // protocol 14: the owner's newest hit taken
+  std::optional<ObjectStrike> strike;               // row 230: the owner's Link frozen by its scream
   bool operator==(const ObjectState&) const = default;
 };
 
@@ -986,6 +1003,17 @@ inline constexpr std::uint8_t takes_turns = 1u << 4;
 // such an object with a game that sets this bit (OBJECT_OWNER never moves it to one that does not), so the death,
 // the key and the carpenter freed run in a game whose logic made the fight. An older server ignores the bit.
 inline constexpr std::uint8_t own_logic = 1u << 5;
+// Row 222 (Twinrova, option C): this object is a boss's battle manager (Enemy_KotakeKoumeBattleManager): its game's
+// manager chooses its sisters' battle state the whole fight, from its own Link, and no other game's manager knows
+// that state. The server moves such a group's root only from an unfit, unready or gone owner (Session::orders_root),
+// never by distance, a nearer player, a chase or a stun hit. An older server ignores the bit.
+inline constexpr std::uint8_t battle_manager = 1u << 6;
+// Row 232 (Dead Hand): set on a boss's entry by a game where a summoned piece of that boss that this game owns holds
+// this game's own Link (one of Dead Hand's hands, owned here, in its grab). The boss's AI answers a grab only in its
+// own game (OneShotDeadHandHandSendMessage MessageAppear: he rises by the held Link), so a player grabbed in a game
+// that does not own him was held with nothing rising. The server hands the boss to that game once its owner's attack
+// has ended (Session::grab_owner), unless its owner is held too. An older server ignores the bit.
+inline constexpr std::uint8_t grabbed_here = 1u << 7;
 }  // namespace object_presence
 
 struct ObjectPresence {
@@ -1817,6 +1845,24 @@ struct ModSettings {
   bool operator==(const ModSettings&) const = default;
 };
 
+// MOD_DATA (492, issue 250 (1)): a small value a mod gives the other players' copies of the same mod,
+// under a key of its own (co-op itself uses the mod id "coop": key "skin", the custom model a player
+// wears). The sender's own value only: the server writes the sender's number, keeps the newest value per
+// player, mod and key, relays it, gives a joiner everyone's, and drops a player's values when it leaves.
+// An empty value clears the key. The server never reads the bytes. Limits: kMaxModDataValueBytes a
+// value, kMaxModDataKeys keys per mod and kMaxModDataMods mods per player (more are dropped).
+inline constexpr std::size_t kMaxModDataKeyChars = 32;     // 1 to 32, [a-z0-9_]
+inline constexpr std::size_t kMaxModDataValueBytes = 64;
+inline constexpr std::size_t kMaxModDataKeys = 8;
+inline constexpr std::size_t kMaxModDataMods = 16;
+struct ModData {
+  std::uint8_t player_number = kPlayerSelf;  // 0 from the sender, 1 to 16 relayed
+  std::string mod_id;                        // as ModEntry::id
+  std::string key;
+  std::vector<std::uint8_t> value;           // 0 to kMaxModDataValueBytes; empty: cleared
+  bool operator==(const ModData&) const = default;
+};
+
 // The Lobby (protocol 11, docs/protocol.md "Lobby"): the host's moderation,
 // all of it carried out by the server, which takes a LOBBY_ACTION from the
 // host only. A player's own (local) mutes never reach the wire.
@@ -2014,6 +2060,7 @@ struct LiftShare {
 // values, never pointers.
 inline constexpr std::size_t kPvpKindWords = 11;
 using PvpKind = std::array<std::uint32_t, kPvpKindWords>;
+static_assert(kStrikeKindWords == kPvpKindWords);  // the same words of a hit (row 230's ObjectStrike)
 
 // What dealt a strike (PVP_STRIKE's source).
 enum class PvpSource : std::uint8_t {
@@ -2137,7 +2184,7 @@ using Message = std::variant<Hello, Welcome, Refused, PlayerJoined, PlayerLeft,
                              LocalJoin, LocalJoined, LocalLeave, LocalSample, LocalMessage, LinkSound,
                              BossScene, BossHeart, PlayerLook, SwitchState, JoinKnock, JoinAllow,
                              BombTake, BombAnswer, BombShare, LiftAsk, LiftAnswer, LiftPlace,
-                             LiftShare, PvpStrike, PvpResult, PvpNative, BossAlive>;
+                             LiftShare, PvpStrike, PvpResult, PvpNative, BossAlive, ModData>;
 
 MessageType type_of(const Message& message);
 

@@ -330,8 +330,14 @@ private:
 class Readiness {
 public:
     // `intro_played`: nothing when the flag is not read. `pre_battle`:
-    // CoopObjects::LastBossPreBattle. `room`: the room we are in.
-    bool Step(std::uint8_t room, std::optional<bool> intro_played, std::optional<bool> pre_battle);
+    // CoopObjects::LastBossPreBattle. `room`: the room we are in. `hurt`:
+    // CoopObjects::LastBossHurt: a boss that lost life this visit is in its
+    // fight (a boss waits at full life), so a late arrival's copy following it
+    // is ready too, also a boss with no pre-battle animation known (every boss
+    // but Gohma): before, such a game stayed unready the whole fight and its
+    // stun never took the boss (row 164 follow-up, the audit's gap C).
+    bool Step(std::uint8_t room, std::optional<bool> intro_played, std::optional<bool> pre_battle,
+              std::optional<bool> hurt = std::nullopt);
     void Reset();
     // True once, at the Step that found our boss out of its pre-battle phase.
     bool TakeFoughtNews() { return std::exchange(fought_news_, false); }

@@ -2097,6 +2097,11 @@ public:
             sync_.SetDying(g_dying);
         }
         sync_.Tick(*scene, self, server_now_us, seen, send, writes);
+        for (const CoopObjects::Sync::LinkStrike& k : sync_.TakeLinkStrikes()) {
+            // Row 230: another game's Redead or Gibdo froze its owner's Link with our Link in its reach: ours takes
+            // that scream's hit, no life (its game's SleepParalysis reaction).
+            CoopObjects::HurtOurLinkNative(0, k.at, k.from, k.kind);
+        }
         // A Gold Skulltula whose key this save already holds is not made again
         // (issue 89, 2026-11-16). The game reads a placement's key once, when
         // the scene's actors are made, and never looks again, so a key that
@@ -2651,6 +2656,15 @@ public:
             WriteLife(system.ApplicationMemory(), r, w);
         }
         if (switch_share_mode_ != 0) {
+            // Row 164 follow-up: the players whose world stands still (paused, the quick-switch menu, loading); their
+            // presses are not held meanwhile.
+            switch_away_.clear();
+            session->with_client([&](coop::net::Client& c) {
+                for (const auto& p : c.players()) {
+                    if ((p.status.value_or(0) & kSwitchAway) != 0) switch_away_.insert(p.number);
+                }
+                return 0;
+            });
             SwitchShare(system, r, *scene, server_now_us, send);
         }
         if (platforms_mode_ != 0) {
@@ -2842,6 +2856,9 @@ public:
     static constexpr u8 kCounterAway = coop::protocol::status::paused | coop::protocol::status::in_menu |
                                        coop::protocol::status::loading | coop::protocol::status::in_cutscene;
     std::set<u8> counter_away_;
+    // Row 164 follow-up: a presser whose world stands still (not a cutscene: a press often plays its own) is not held.
+    static constexpr u8 kSwitchAway = coop::protocol::status::paused | coop::protocol::status::loading;
+    std::set<u8> switch_away_;
     std::set<u64> counter_nodes_;  // the platform nodes the ring named, while their actor is here
     // Each counter node's placement in the room table, found once a scene (Counters).
     std::unordered_map<u64, const CoopRoomObjects::Placement*> counter_places_;
@@ -3249,6 +3266,7 @@ private:
             main_ = FindMain(system, process);
             actors_.clear();
             first_ = true;
+            listed_ = false;
             names_.clear();
             stamps_.clear();
             no_area_.clear();
@@ -3315,7 +3333,7 @@ private:
         std::vector<coop::protocol::SwitchState> out;
         std::vector<std::string> notes;
         const auto holds = CoopSwitchShare::TheSharer().Tick(scene, seen, !sync_.OthersHere(server_now_us).empty(),
-                                                             SteadyNowMs(), out, notes);
+                                                             SteadyNowMs(), out, notes, switch_away_);
         for (auto& m : out) {
             send.emplace_back(std::move(m));
         }
@@ -4373,6 +4391,7 @@ private:
         life_components_ = std::move(life_components);
         CoopDbno::NoteEnemiesNear(player && CoopDbno::AnyNear(*player, foes));
         sync_.SetPlayer(player);
+        NoteOurLinkHit(r);  // row 230: a Redead's or Gibdo's scream on our Link
         sync_.SetLures(CoopProjectiles::TheLures().Get());  // issue 151: our cast lures
         player_ = player;
         {  // issue 144 / scrub sales: a scrub near our Link or bound into our event holds its flags
@@ -5829,7 +5848,9 @@ private:
             node = r.Ptr(*node);
         }
         const bool whole = node && walked == *count;
-        if (first_ && whole) {
+        // Once a game run: the list is read every frame (Collect), and first_ is the debug walk's only.
+        if (!listed_ && whole) {
+            listed_ = true;
             LOG_INFO(Core, "coop: objects: list head {:#x}, {} entries, {} actors", head, walked,
                      out.size());
         }
@@ -6040,6 +6061,34 @@ private:
     CoopEvery::Every scan_{CoopEvery::kTwoFramesUs};
     CoopPivot::Follower pivot_;
     u32 link_hit_said_ = 0xffffffffu;  // the scream probe: our Link's last hit id seen
+    u32 link_hit_id_ = 0xffffffffu;    // row 230 (NoteOurLinkHit): our Link's last hit id read in the walk
+
+    // Row 230: our Link's Life took a new hit since the last walk (its last hit id moved): who dealt it, its kind
+    // words and the life it took, for the Sync (a screamer of ours shares its scream). Read only.
+    void NoteOurLinkHit(Reader& r) {
+        const u64 link = TheLinkActor().load();
+        const auto table = link != 0 ? r.Ptr(link + kActorComponents) : std::nullopt;
+        const auto life = table ? r.Ptr(*table + kComponentLife) : std::nullopt;
+        const auto id = life ? r.Get<u32>(*life + kLastHitId) : std::nullopt;
+        if (!id || *id == link_hit_id_) {
+            return;
+        }
+        const bool first = link_hit_id_ == 0xffffffffu;
+        link_hit_id_ = *id;
+        if (first) {
+            return;  // (the hit before we looked)
+        }
+        const u64 attacker = r.Get<u64>(*life + kHitRecord).value_or(0);
+        const auto rec = r.Get<coop::protocol::HitRecord>(*life + kHitRecord);
+        if (attacker == 0 || !rec) {
+            return;
+        }
+        std::array<std::uint32_t, coop::protocol::kStrikeKindWords> kind{};
+        for (std::size_t i = 0; i < kind.size(); ++i) {
+            kind[i] = (*rec)[CoopHitReplay::kRecKind + i];
+        }
+        sync_.NoteOurLinkHit(attacker, kind, r.Get<s32>(*life + kLifeHurt).value_or(0));
+    }
     u64 pivot_actor_ = 0;
     u64 pivot_look_ms_ = 0;
     std::optional<std::int32_t> pivot_dir_said_;
@@ -6094,6 +6143,7 @@ private:
     Kernel::KProcess* process_ = nullptr;
     u64 main_ = 0;
     bool first_ = true;
+    bool listed_ = false;   // the list head said once this game run (List)
     std::unordered_map<u64, Actor> actors_;
 };
 
@@ -6150,6 +6200,23 @@ std::optional<LinkHearts> OurLife() {
         return std::nullopt;
     }
     return LinkHearts{TheLife().life.load(), TheLife().max.load()};
+}
+
+std::optional<std::int32_t> RaiseLinkMax(Core::System& system, std::uint64_t actor, std::int32_t quarters) {
+    auto& memory = system.ApplicationMemory();
+    Reader r(memory);
+    const auto table = r.Ptr(actor + kActorComponents);
+    const auto life = table ? r.Ptr(*table + kComponentLife) : std::nullopt;
+    const auto max_at = life ? r.Ptr(*life + kLifeMax) : std::nullopt;
+    if (!max_at || quarters <= 0 || quarters > 80 || !memory.IsValidVirtualAddressRange(*max_at + 8, 4)) {
+        return std::nullopt;
+    }
+    const s32 max = r.Get<s32>(*max_at + 8).value_or(-1);
+    if (max <= 0 || max >= quarters) {
+        return std::nullopt;
+    }
+    memory.Write32(*max_at + 8, static_cast<u32>(quarters));
+    return max;
 }
 
 void SetMaxLife(std::optional<std::int32_t> quarters) {

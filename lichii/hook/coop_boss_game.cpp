@@ -226,6 +226,7 @@ struct Glue {
     Glue() {
         on = Env("LICHII_COOP_BOSS") != "0";
         scenes_on = Env("LICHII_COOP_BOSS_SCENES") != "0";
+        scenes.SetLateDeath(Env("LICHII_COOP_BOSS_LATE_DEATH") != "0");   // (Navi)
         by_scene = Env("LICHII_COOP_BOSS_MOVE") != "matrix";
         const auto d = Env("LICHII_COOP_DEBUG_BOSS");
         debug = !d.empty() && d != "0";
@@ -345,9 +346,11 @@ struct Glue {
                 // boss-copy-b: also ready once our boss left its pre-battle
                 // phase here (a late joiner's copy following the fight).
                 const bool ready =
-                    readiness.Step(room->index, intro, CoopObjects::LastBossPreBattle(Bodies(*room)));
+                    readiness.Step(room->index, intro, CoopObjects::LastBossPreBattle(Bodies(*room)),
+                                   CoopObjects::LastBossHurt(Bodies(*room)));
                 if (readiness.TakeFoughtNews() && intro.has_value() && !*intro) {
-                    LOG_INFO(Core, "coop: boss: our boss left its pre-battle phase here: ready to own it without our intro");
+                    LOG_INFO(Core, "coop: boss: our boss left its pre-battle phase or lost life here: ready to own it "
+                                   "without our intro");
                 }
                 std::vector<std::string> unready;
                 if (!ready) {
