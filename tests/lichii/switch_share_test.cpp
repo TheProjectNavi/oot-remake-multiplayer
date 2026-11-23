@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -29,10 +30,11 @@ struct Game {
     std::vector<proto::SwitchState> sent;
     std::vector<Hold> holds;
     std::vector<std::string> notes;
+    std::set<std::uint8_t> away;  // the players whose world stands still (PLAYER_STATUS paused or loading)
 
     void Tick(std::uint64_t now_ms, bool others = true, const std::string& scene = kScene) {
         std::vector<proto::SwitchState> out;
-        holds = sharer.Tick(scene, {Seen{Plate(), 0x1000, on, true}}, others, self, now_ms, out, notes);
+        holds = sharer.Tick(scene, {Seen{Plate(), 0x1000, on, true}}, others, self, now_ms, out, notes, away);
         for (auto& m : out) {
             m.player_number = self;  // the server's relay writes the sender
             sent.push_back(m);
@@ -59,6 +61,34 @@ TEST_CASE("switch share: the generated lines are the timed switches no CoopEyeSw
     CHECK(CoopRoomObjects::SwitchPlugsOf("ForestTemple", "Obj_StepSwitch_A_01", {17.2f, 112.3f, -23.0f}).empty());
     CHECK(CoopRoomObjects::SharedSwitchName("Obj_SwitchHit_A_06"));
     CHECK_FALSE(CoopRoomObjects::SharedSwitchName("Obj_DiveSwitch_A_01"));  // a CoopEyeSwitch line only
+}
+
+TEST_CASE("switch share: a presser whose world stands still is not held, and is again when back (row 164 follow-up)") {
+    Game a;
+    Game b;
+    b.self = 2;
+    std::uint64_t t = 1000;
+    a.on = true;
+    a.Tick(t += 100);
+    REQUIRE(a.sent.size() == 1);
+    b.sharer.Receive(a.sent[0], t);
+    b.Tick(t += 100);
+    REQUIRE(b.holds.size() == 1);  // A stands on the plate: B's held
+    // A opens the pause or quick-switch menu: its own timer stands still, B's plate is let go at once (not after
+    // kRemoteHoldMs), so B's own timer runs as when A steps off.
+    b.away = {1};
+    b.Tick(t += 100);
+    CHECK(b.holds.empty());
+    b.Tick(t += 1000);
+    CHECK(b.holds.empty());
+    // A is back, still on the plate: held again, with no new press needed within kRemoteHoldMs.
+    b.away.clear();
+    b.Tick(t += 100);
+    CHECK(b.holds.size() == 1);
+    // Another player away changes nothing for A's press.
+    b.away = {3};
+    b.Tick(t += 100);
+    CHECK(b.holds.size() == 1);
 }
 
 TEST_CASE("switch share: our press is sent, held on the other game's switch while on, let go when off") {

@@ -350,9 +350,11 @@ struct Glue {
                 // the fight (boss_to_ready); with every game in the intro the owner keeps it, as before.
                 const bool in_intro = sync.InIntro(event, now_us);
                 const bool ready =
-                    readiness.Step(room->index, intro, CoopObjects::LastBossPreBattle(Bodies(*room)), in_intro);
+                    readiness.Step(room->index, intro, CoopObjects::LastBossPreBattle(Bodies(*room)), in_intro,
+                                   CoopObjects::LastBossHurt(Bodies(*room)));
                 if (readiness.TakeFoughtNews() && intro.has_value() && !*intro) {
-                    LOG_INFO(Core, "coop: boss: our boss left its pre-battle phase here: ready to own it without our intro");
+                    LOG_INFO(Core, "coop: boss: our boss left its pre-battle phase or lost life here: ready to own it "
+                                   "without our intro");
                 }
                 std::vector<std::string> unready;
                 if (!ready) {

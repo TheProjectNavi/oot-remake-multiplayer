@@ -15,6 +15,7 @@ the plan; [dungeons-boss.md](dungeons-boss.md) says how the sync works today.
 - **Never stuck on a player who cannot fight** (2026-11-21, every enemy): a boss, or any enemy in its fight, leaves
   an owner who goes down or dies at once and one paused after 2 s (`fight_owner_dead_us`, `fight_owner_paused_us`;
   out of a fight the old 10 s and 6 s), for a player up and playing. With nobody up it stays where it is.
+- **Nor on a player held in a cutscene of their own** (row 164 follow-up): an item get, Navi's talk or a late intro of their own game holds the owner's Link, and the boss's AI (which fights that Link alone) stood with it on every screen. A boss whose owner has been `in_cutscene` for 3 s (`fight_owner_cutscene_us`; 0 off) goes to a player up, playing and in no cutscene. Never while the boss itself plays an event or its death or is at life 0 (its own intro, phase change or death: every game is in that one, the owner's AI is in it on purpose), and never to a game in a cutscene too. Stat `boss_from_cutscene`. Tests: `session_test.cpp` (row 164 follow-up).
 - **Plain enemies can take turns too, OFF by default** (`enemy_turns`): the same rule as a boss's, between its
   attacks, among the players within 12 m of it (`enemy_turn_m`). It stays off: a plain enemy's AI chases only its
   owner's Link, so every turn walks it over to the other player and back (the shuttle of report 138, docs/objects.md

@@ -660,10 +660,60 @@ void Session::on_player_message(ConnectionId id, Connection& c, std::uint8_t cha
       (std::holds_alternative<LocalSample>(message) &&
        local_player(id, std::get<LocalSample>(message).seat)) ||
       (std::holds_alternative<LocalMessage>(message) && local_player(id, std::get<LocalMessage>(message).seat));
-  if (!host_save && !seat_envelope && !within_rate(c, channel, bytes, now_us)) {
-    ++stats_.rate_limited;
+  // Reliable messages wait in order behind any already waiting, and over the rate they wait instead of being dropped
+  // (reliable_queue_max). PING is answered at once or not at all (a late PONG would skew the clock), unreliable ones
+  // are dropped as before.
+  const bool waits = channel <= kChannelOwnership && !std::holds_alternative<Ping>(message) && !host_save &&
+                     !seat_envelope;
+  const auto defer = [&] {
+    if (c.deferred.size() >= config_.reliable_queue_max) {
+      ++stats_.rate_limited;
+      return;
+    }
+    ++stats_.rate_deferred;
+    c.deferred.push_back({channel, std::move(message), bytes});
+  };
+  if (waits && !c.deferred.empty()) {
+    defer();
     return;
   }
+  if (!host_save && !seat_envelope && !within_rate(c, channel, bytes, now_us)) {
+    if (waits) {
+      defer();
+    } else {
+      ++stats_.rate_limited;
+    }
+    return;
+  }
+  dispatch_player_message(id, c, channel, message, now_us);
+}
+
+void Session::run_deferred(std::uint64_t now_us) {
+  std::vector<ConnectionId> waiting;
+  for (const auto& [id, c] : connections_) {
+    if (!c.deferred.empty()) waiting.push_back(id);
+  }
+  for (const ConnectionId id : waiting) {
+    // Each step may remove players (a LEAVE): look the connection up again every time.
+    for (;;) {
+      auto it = connections_.find(id);
+      if (it == connections_.end() || it->second.deferred.empty()) break;
+      Connection& c = it->second;
+      if (c.state != State::joined) {
+        c.deferred.clear();
+        break;
+      }
+      Connection::Deferred& d = c.deferred.front();
+      if (!within_rate(c, d.channel, d.bytes, now_us)) break;
+      Connection::Deferred next = std::move(d);
+      c.deferred.pop_front();
+      dispatch_player_message(id, c, next.channel, next.message, now_us);
+    }
+  }
+}
+
+void Session::dispatch_player_message(ConnectionId id, Connection& c, std::uint8_t channel, Message& message,
+                                      std::uint64_t now_us) {
   if (const auto* ping = std::get_if<Ping>(&message)) {
     send(id, kChannelSession, Pong{ping->sender_time_us, now_us});
     return;
@@ -686,11 +736,11 @@ void Session::on_player_message(ConnectionId id, Connection& c, std::uint8_t cha
     return;
   }
   if (std::holds_alternative<FlagSet>(message)) {
-    on_flag_set(c, message);
+    on_flag_set(c, message, now_us);
     return;
   }
   if (std::holds_alternative<FlagState>(message) || std::holds_alternative<FlagReset>(message)) {
-    on_flag_state(id, c, message);
+    on_flag_state(id, c, message, now_us);
     return;
   }
   if (std::holds_alternative<SaveAsk>(message) || std::holds_alternative<SavePart>(message)) {
@@ -1252,7 +1302,24 @@ void Session::on_join_partner(ConnectionId id, Connection& c, JoinPartner& j) {
 
 // To the host only, the host itself included: a host's own FLAG_SET comes
 // back to it, so its build answers every FLAG_SET the same way.
-void Session::on_flag_set(Connection& c, Message& message) {
+void Session::on_flag_set(Connection& c, Message& message, std::uint64_t now_us) {
+  // Report 138 (4): just after the host's save load, a guest's change to a flag the reset set was most likely sent
+  // before that guest had the reset: its old value. Refused, so the save's value stands.
+  if (now_us < reset_fence_until_ && !reset_fence_.empty()) {
+    auto& entries = std::get<FlagSet>(message).flags;
+    const std::size_t before = entries.size();
+    std::erase_if(entries, [&](const FlagEntry& e) {
+      if (e.kind == FlagKind::count_delta) return false;
+      const auto it = reset_fence_.find(e.key);
+      return it != reset_fence_.end() && it->second != e.value;
+    });
+    if (entries.size() != before) {
+      stats_.reset_fenced += before - entries.size();
+      log("player " + std::to_string(c.number) + ": " + std::to_string(before - entries.size()) +
+          " flag change(s) refused just after the host's save load (sent before its game had the reset; report 138)");
+    }
+    if (entries.empty()) return;
+  }
   set_sender(message, c.number);
   send(*host_, kChannelProgress, message);
   ++stats_.flag_relayed;
@@ -1269,7 +1336,7 @@ void Session::on_flag_set(Connection& c, Message& message) {
   }
 }
 
-void Session::on_flag_state(ConnectionId id, Connection& c, Message& message) {
+void Session::on_flag_state(ConnectionId id, Connection& c, Message& message, std::uint64_t now_us) {
   if (id != host_) {
     ++stats_.flag_refused;
     return;
@@ -1279,7 +1346,7 @@ void Session::on_flag_state(ConnectionId id, Connection& c, Message& message) {
   const auto& flags = std::holds_alternative<FlagReset>(message) ? std::get<FlagReset>(message).flags
                                                                   : std::get<FlagState>(message).flags;
   for (const FlagEntry& e : flags) keep_flag(e);
-  if (std::holds_alternative<FlagReset>(message)) on_host_reset();
+  if (std::holds_alternative<FlagReset>(message)) on_host_reset(flags, now_us);
   set_sender(message, c.number);
   send_to_others(id, kChannelProgress, message);
   ++stats_.flag_relayed;
@@ -1321,8 +1388,13 @@ void Session::on_save(ConnectionId id, Connection& c, Message& message) {
   ++stats_.relayed;
 }
 
-void Session::on_host_reset() {
+void Session::on_host_reset(const std::vector<FlagEntry>& flags, std::uint64_t now_us) {
   ++stats_.host_resets;
+  reset_fence_.clear();
+  if (config_.reset_fence_us != 0) {
+    for (const FlagEntry& e : flags) reset_fence_[e.key] = e.value;
+    reset_fence_until_ = now_us + config_.reset_fence_us;
+  }
   // Owners of session-wide kept state add their clear here (docs/flags.md, "Saves").
   world_.forget_kept();  // locked doors' kept breaks (docs/dungeon.md, "Locked doors")
   dead_.clear();         // kills-late: the save's enemies are alive again
@@ -1438,6 +1510,7 @@ void Session::on_status(Connection& c, std::uint8_t flags, std::uint64_t now_us)
   };
   since(status::paused, c.paused_since);
   since(status::dead, c.dead_since);
+  since(status::in_cutscene, c.cutscene_since);
   c.status = flags;
 }
 
@@ -2194,6 +2267,20 @@ std::string Session::unfit_why(const Connection& c, std::uint64_t now_us) const 
   return "unfit";
 }
 
+bool Session::owner_in_own_cutscene(const Connection& c, const Object& o, std::uint64_t now_us) const {
+  if (!o.boss || config_.fight_owner_cutscene_us == 0 || c.cutscene_since == 0) return false;
+  if (now_us - c.cutscene_since < config_.fight_owner_cutscene_us) return false;
+  if (o.last_state) {
+    // The boss's own intro, phase change or death: every game plays it, the owner's AI is in it on purpose.
+    if (o.last_state->life && o.last_state->life->life <= 0) return false;
+    if (const auto& a = o.last_state->animation;
+        a && (coop::protocol::anim::IsDeath(a->name) || coop::protocol::anim::IsEvent(a->name))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool Session::unfit_owner(const Connection& c, std::uint64_t now_us) const {
   if (c.status & status::loading) return true;
   // Downed (or out): its enemies go to a player still up, whose game's AI
@@ -2788,17 +2875,25 @@ void Session::run_ownership(std::uint64_t now_us) {
     }
 
     // An owner whose game stands still gives it up, fight or not; a boss's sooner (its AI fights its Link alone).
-    if (unfit_owner(oc, now_us) || ((o.boss || in_fight(o, now_us)) && unfit_fight_owner(oc, now_us))) {
+    // A boss also leaves an owner held in a cutscene of its own game (row 164 follow-up), for a game in none.
+    const bool owner_cut = owner_in_own_cutscene(oc, o, now_us);
+    if (unfit_owner(oc, now_us) || ((o.boss || in_fight(o, now_us)) && unfit_fight_owner(oc, now_us)) || owner_cut) {
+      std::optional<ConnectionId> next = o.fish ? std::nullopt : best_other(o, owner, true, now_us);
+      if (owner_cut && next && connections_.at(*next).cutscene_since != 0) next.reset();  // its event: no better
       if (o.fish) {
         fish_owner(oid, o, owner, true, now_us);  // a hooked fish waits for it
-      } else if (auto next = best_other(o, owner, true, now_us)) {
+      } else if (next) {
         // Row 189: a boss in its fight (its owner's game ready) never goes to a game whose boss has not begun
         // it (unready: every game's boss would go back to its wait before the fight). It waits for its owner,
         // or for a ready game; an owner that leaves still gives it on (next_owner: nobody else has it).
         if (o.boss && !o.unready.contains(owner) && o.unready.contains(*next)) {
           ++stats_.boss_kept_from_unready;
         } else {
-          ask_handover(oid, o, *next, now_us, "its owner is unfit (" + unfit_why(oc, now_us) + ")");
+          const bool cut_only = owner_cut && !unfit_owner(oc, now_us) && !unfit_fight_owner(oc, now_us);
+          if (cut_only) ++stats_.boss_from_cutscene;
+          ask_handover(oid, o, *next, now_us,
+                       cut_only ? std::string("its owner is held in a cutscene of its own (row 164 follow-up)")
+                                : "its owner is unfit (" + unfit_why(oc, now_us) + ")");
         }
       }
       continue;
@@ -3507,6 +3602,7 @@ void Session::remove_player(ConnectionId id, LeaveReason reason, std::uint64_t n
 }
 
 void Session::tick(std::uint64_t now_us) {
+  run_deferred(now_us);  // reliable messages that waited for their sender's rate
   // Wrong-password counts whose window and block are both over.
   for (auto it = wrong_guesses_.begin(); it != wrong_guesses_.end();) {
     const WrongGuesses& g = it->second;

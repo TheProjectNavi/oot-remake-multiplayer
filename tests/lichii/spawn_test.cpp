@@ -223,6 +223,32 @@ TEST_CASE("spawn: a seed's flight is summed up when it goes (issue 158)") {
     CHECK(sync.Flights().empty());
 }
 
+TEST_CASE("spawn: a boomerang's flight keeps where it turned, its hit for a boss copy (row 164 follow-up)") {
+    CoopSpawn::Sync sync;
+    std::vector<proto::Message> send;
+    std::vector<Copy> copies;
+    const std::map<std::uint64_t, std::uint64_t> none;
+    std::uint64_t now = 1'000'000;
+    sync.Tick(kScene, 1, now, {}, none, send, copies);
+    // Out to x 6 (the stem), then back to the hand.
+    for (float x : {0.0f, 2.0f, 4.0f, 6.0f, 4.0f, 2.0f, 0.5f}) {
+        now += 33 * kMs;
+        sync.Tick(kScene, 1, now, {Made(0x7100, x, "Weapon_Boomerang")}, none, send, copies);
+    }
+    for (int i = 0; i < 2; ++i) {
+        now += 33 * kMs;
+        sync.Tick(kScene, 1, now, {}, none, send, copies);
+    }
+    REQUIRE(sync.Flights().size() == 1);
+    const auto& f = sync.Flights()[0];
+    CHECK(CoopSpawn::IsReturnShot(f.name));
+    CHECK(f.far == doctest::Approx(6.0f));
+    CHECK(f.far_at[0] == doctest::Approx(6.0f));
+    CHECK(f.far >= CoopSpawn::kReturnShotMinFarM);
+    CHECK_FALSE(CoopSpawn::IsReturnShot("Shootable_DekuSeed"));  // a seed ends where it hit: its own end counts
+    CHECK(CoopSpawn::IsReturnShot("Shootable_HookLong"));
+}
+
 namespace {
 
 // A nocked seed at x, turned `rotation`.

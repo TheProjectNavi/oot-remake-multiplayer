@@ -36,7 +36,7 @@ Each rule answers a way the TotK online sync was seen to break.
 
 - Each message type has its channel, and each is sent by the client, the server or both (table below). A receiver refuses a message that came on the wrong channel or from a side that may not send it (`check_received` in the code).
 - The server relays and decides; it never runs the game. The host player's game is the source of truth for shared progress (stage 4).
-- The server holds each player to at most 60 messages a second on channels 0 to 2 and 240 on channels 3 and 4, with bursts of twice that, and drops the rest without a word. A packet longer than any message can be (4 + 65535 bytes, plus 24 when sealed) is thrown away unread.
+- The server holds each player to at most 60 messages a second on channels 0 to 2 and 240 on channels 3 and 4, with bursts of twice that. Over it, a reliable message (channels 0 to 2, not `PING`) waits, in the order it came, behind any that already wait, and is handled as the player's budget refills (each server tick); at most `reliable_queue_max` (4096) wait, and past that they are dropped and counted (`rate_limited`). Before (row 164 follow-up), every message over the rate was dropped without a word, and since ENet had acknowledged it its sender never sent it again: a flag, a kill, a break or a hand-over answer was lost for good (report 138's host: 137 in one 4-player session). The unreliable channels and `PING` are dropped as before (a late `PONG` would skew the clock). The host's stopping line says `over the rate N dropped, M waited`. A packet longer than any message can be (4 + 65535 bytes, plus 24 when sealed) is thrown away unread.
 
 ## Encoding
 
@@ -280,6 +280,8 @@ The first player in hosts. When the host leaves, the remaining player with the l
 ### Saves: the host's save decides (protocol 7, `FLAG_RESET`)
 
 Alex (2026-11-11): "Let's make it follow the hosts save." A host's build sends `FLAG_RESET` after its own save load, with every shared flag its load changed, as its game has them now, 0s included. The server takes it from the host only, keeps each value (replacing what it had, as with `FLAG_STATE`) and relays it to everyone else with the host's number. Every player writes each value exactly: no merging (max, OR) and no one-way rule, so items, keys, chests and switches go back to the host's save. A player's own save load sends nothing and changes nothing for the group: that game takes the group's values back. Progress made while playing still merges as before. When the host leaves, the new host's state is the truth from then on, with no reset. How a build tells a save load from a door, and when it sends, is in [flags.md](flags.md), "Saves". A build without protocol 7 does not know type 135; all players need the same release.
+
+**In flight across a save load (report 138 (4)).** A guest's `FLAG_SET` sent before its game had the host's `FLAG_RESET` carried its old values, and the host's build merged them back in: a guest's `MaxLife` 16 over the save's 12 (a Heart Container then taken again on the refight: max hearts), a boss beaten again or not. For `reset_fence_us` (2 s) after a host's reset, the server refuses a guest's entry for a flag the reset set, unless it is the reset's own value or a count change (kind 4); the rest of that `FLAG_SET` goes on. Log `player N: K flag change(s) refused just after the host's save load ...`, stat `reset_fenced`. After the 2 s a guest's change is its own again.
 
 ### Save transfer: the host's save file (protocol 9, `SAVE_ASK` and `SAVE_PART`)
 

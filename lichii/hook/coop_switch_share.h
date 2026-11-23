@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <set>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -88,10 +89,12 @@ public:
 
     // Present thread, each objects walk. `others_here`: another player is in our scene (else nothing is sent).
     // `self`: our player number (0: not known yet). Fills `send` (our presses) and returns what to hold; notes are
-    // log lines.
+    // log lines. `away`: the players whose world stands still now (PLAYER_STATUS paused or loading: the pause or
+    // quick-switch menu, a load). Their presses are not held while so (row 164 follow-up): their own switch's timer
+    // stands still with their world, ours would run on held.
     std::vector<Hold> Tick(const std::string& scene, const std::vector<Seen>& seen, bool others_here,
                            std::uint8_t self, std::uint64_t now_ms, std::vector<coop::protocol::SwitchState>& send,
-                           std::vector<std::string>& notes);
+                           std::vector<std::string>& notes, const std::set<std::uint8_t>& away = {});
 
     void Clear();
 
@@ -119,7 +122,7 @@ private:
         std::uint64_t held_since_ms = 0;  // for the log: how long we held it, how long our press lasted
         std::uint64_t pressed_since_ms = 0;
     };
-    bool RemoteOn(State& s, std::uint64_t now_ms);
+    bool RemoteOn(State& s, std::uint64_t now_ms, const std::set<std::uint8_t>& away);
 
     std::mutex mutex_;
     std::string scene_;

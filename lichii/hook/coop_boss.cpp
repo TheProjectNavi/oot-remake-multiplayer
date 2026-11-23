@@ -141,7 +141,7 @@ Vec ArrivalFor(const Room& room, std::uint8_t number) {
 }
 
 bool Readiness::Step(std::uint8_t room, std::optional<bool> intro_played, std::optional<bool> pre_battle,
-                     bool in_intro) {
+                     bool in_intro, std::optional<bool> hurt) {
     if (room_ != room) {
         Reset();
         room_ = room;
@@ -156,7 +156,7 @@ bool Readiness::Step(std::uint8_t room, std::optional<bool> intro_played, std::o
     }
     if (pre_battle == true) {
         seen_pre_battle_ = true;
-    } else if (pre_battle == false && seen_pre_battle_ && !fought_) {
+    } else if (!fought_ && ((pre_battle == false && seen_pre_battle_) || hurt == true)) {
         fought_ = true;
         fought_news_ = true;
     }

@@ -2718,6 +2718,15 @@ public:
             WriteLife(system.ApplicationMemory(), r, w);
         }
         if (switch_share_mode_ != 0) {
+            // Row 164 follow-up: the players whose world stands still (paused, the quick-switch menu, loading); their
+            // presses are not held meanwhile.
+            switch_away_.clear();
+            session->with_client([&](coop::net::Client& c) {
+                for (const auto& p : c.players()) {
+                    if ((p.status.value_or(0) & kSwitchAway) != 0) switch_away_.insert(p.number);
+                }
+                return 0;
+            });
             SwitchShare(system, r, *scene, server_now_us, send);
         }
         if (platforms_mode_ != 0) {
@@ -2909,6 +2918,9 @@ public:
     static constexpr u8 kCounterAway = coop::protocol::status::paused | coop::protocol::status::in_menu |
                                        coop::protocol::status::loading | coop::protocol::status::in_cutscene;
     std::set<u8> counter_away_;
+    // Row 164 follow-up: a presser whose world stands still (not a cutscene: a press often plays its own) is not held.
+    static constexpr u8 kSwitchAway = coop::protocol::status::paused | coop::protocol::status::loading;
+    std::set<u8> switch_away_;
     std::set<u64> counter_nodes_;  // the platform nodes the ring named, while their actor is here
     // Each counter node's placement in the room table, found once a scene (Counters).
     std::unordered_map<u64, const CoopRoomObjects::Placement*> counter_places_;
@@ -3383,7 +3395,7 @@ private:
         std::vector<coop::protocol::SwitchState> out;
         std::vector<std::string> notes;
         const auto holds = CoopSwitchShare::TheSharer().Tick(scene, seen, !sync_.OthersHere(server_now_us).empty(),
-                                                             sync_.Self(), SteadyNowMs(), out, notes);
+                                                             sync_.Self(), SteadyNowMs(), out, notes, switch_away_);
         for (auto& m : out) {
             send.emplace_back(std::move(m));
         }

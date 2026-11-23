@@ -1152,6 +1152,21 @@ TEST_CASE("boss: never seen pre-battle, a boss is ready by its intro flag only (
     CHECK(r.Step(3, std::nullopt, std::nullopt));  // flag not read: as before, not held back
 }
 
+TEST_CASE("boss: a late arrival is ready once its boss has lost life, with no pre-battle animation known (row 164 follow-up)") {
+    CoopBoss::Readiness r;
+    // King Dodongo (no pre-battle animation known): at full life the flag decides, as before.
+    CHECK_FALSE(r.Step(1, false, false, false, false));
+    CHECK_FALSE(r.Step(1, false, false, false, std::nullopt));
+    CHECK_FALSE(r.TakeFoughtNews());
+    // Life below its maximum: the fight is on, our copy follows it: ready, told once, kept.
+    CHECK(r.Step(1, false, false, false, true));
+    CHECK(r.TakeFoughtNews());
+    CHECK_FALSE(r.TakeFoughtNews());
+    CHECK(r.Step(1, false, false, false, false));  // a refill for its next phase: still ready
+    // Another room starts over.
+    CHECK_FALSE(r.Step(2, false, false, false, false));
+}
+
 TEST_CASE("boss: the boss gone with no reading at life 0 in an event is decided when it ends in the room (row 149)") {
     // kd-twist run 20261120-074938: B was downed in King Dodongo's fight; co-op's respawn took it to the dungeon's
     // entrance through the game's map change event. That event, with KD unloaded by it, was taken for his death.

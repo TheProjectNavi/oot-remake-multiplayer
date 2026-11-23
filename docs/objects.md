@@ -692,6 +692,8 @@ Logs:
 - `...: another player's is on: ours held on, its own logic runs`
 - `...: another player's is off: let go`
 
+**A presser whose world stands still (row 164 follow-up).** A press is held in the other games while the presser's game says it is on, and until `kRemoteHoldMs` (5 s) after its last send. A presser in the pause or quick-switch menu, or loading, sends nothing more, and its own switch's timer (`HoldGeneralTimerSwitch`) stands still with its world, so the others held their plate for up to 5 s more while their own timer ran: the door or mover stayed open past its time and the games came out of step. Now a press of a player whose `PLAYER_STATUS` says `paused` or `loading` is not held (kept, not forgotten): each other game's own timer runs as when the presser steps off. When the presser is back and still on the switch, the press is held again (its 2 s resend keeps it). A cutscene does not count: a press often plays its own. Test: `switch_share_test.cpp` (row 164 follow-up).
+
 `LICHII_COOP_SWITCH_SHARE=0` turns it off; `=probe` sends and logs but never sets. It runs in the object walk, so it needs `LICHII_COOP_OBJECTS=1` (on in the kit). Solo: nothing is sent with no other player in the scene, and nothing is held without a received press. A player who leaves (`PLAYER_LEFT`) is let go at once. Its svc caller has order 49 (`coop_caller_orders.h`, where every caller's order is listed; a test fails on a number used twice).
 
 Still open: the Deku Tree compass-room lifts' `OnPlayer` (not `RideOnPlayer`) is not set for another player standing on them in a follower's game. That is visual only (the lift may sink under their puppet).

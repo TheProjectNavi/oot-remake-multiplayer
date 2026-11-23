@@ -1882,7 +1882,9 @@ public:
         if (!reading) CoopTime::Loading(report.server_now_us);  // issue 159: a reload, a death
         CoopTime::Frame(system, view.game ? base_ : 0, report.connected ? session_.get() : nullptr,
                         report.server_now_us,
-                        reading && reading->event_running.value_or(false));  // issue 192: no nudge in a cutscene
+                        reading && reading->event_running.value_or(false),  // issue 192: no nudge in a cutscene
+                        // Row 164 follow-up: our game paused (a menu in front, no event), for the host's catch-up.
+                        reading && reading->in_menu.value_or(false) && !reading->event_running.value_or(false));
         // Boss rooms together (docs/dungeons-boss.md). Issue 148: the room's
         // "shut in" flag says when we are past its door.
         std::optional<bool> boss_shut_in;

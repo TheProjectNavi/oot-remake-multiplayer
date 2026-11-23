@@ -737,15 +737,20 @@ TEST_CASE("a player flooding reliable messages is held to the rate, after a burs
   h.join(1, "Link");
   h.join(2, "Zelda");
   h.clear();
-  // 60 a second with bursts of 120: 200 at once lets 120 through.
+  // 60 a second with bursts of 120: 200 at once lets 120 through; the other 80 wait (reliable: never dropped
+  // under reliable_queue_max, row 164 follow-up).
   for (int i = 0; i < 200; ++i) h.receive(1, Chat{0, "spam"}, kChannelSession);
   CHECK(h.to(2).size() == 120);
-  CHECK(h.session.stats().rate_limited == 80);
-  // Half a second later, 30 more.
+  CHECK(h.session.stats().rate_limited == 0);
+  CHECK(h.session.stats().rate_deferred == 80);
+  // Half a second later, 30 more: the waiting ones first, the new ones wait behind them.
   h.clear();
   h.now += 500'000;
+  h.session.tick(h.now);
   for (int i = 0; i < 100; ++i) h.receive(1, Chat{0, "spam"}, kChannelSession);
-  CHECK(h.to(2).size() == 30);
+  std::size_t chats = 0;  // (the tick's own PING to player 2 is no chat)
+  for (const Sent& sent : h.to(2)) chats += std::holds_alternative<Chat>(sent.message) ? 1 : 0;
+  CHECK(chats == 30);
   // PINGs share the budget, so a flood of them gets no flood of PONGs.
   h.clear();
   h.receive(1, Ping{1}, kChannelSession);
@@ -755,6 +760,33 @@ TEST_CASE("a player flooding reliable messages is held to the rate, after a burs
   h.receive(1, TestPayload{1, {}}, kChannelPlayerSamples);
   CHECK(h.to(1).size() == 1);
   CHECK(h.to(2).size() == 1);
+}
+
+TEST_CASE("row 164 follow-up: reliable messages over the rate wait in order and none is lost, up to reliable_queue_max") {
+  SessionConfig config;
+  config.reliable_queue_max = 50;
+  Harness h(config);
+  h.join(1, "Link");
+  h.join(2, "Zelda");
+  h.clear();
+  // A burst of 120 goes at once, 50 wait, the rest past the queue are dropped and counted.
+  for (int i = 0; i < 200; ++i) h.receive(1, Chat{0, std::to_string(i)}, kChannelSession);
+  CHECK(h.to(2).size() == 120);
+  CHECK(h.session.stats().rate_deferred == 50);
+  CHECK(h.session.stats().rate_limited == 30);
+  // Over the next second the waiting ones go, in the order they came.
+  h.clear();
+  for (int i = 0; i < 10; ++i) {
+    h.now += 100'000;
+    h.session.tick(h.now);
+  }
+  h.collect();
+  std::vector<std::string> texts;
+  for (const auto& sent : h.to(2)) {
+    if (const auto* chat = std::get_if<Chat>(&sent.message)) texts.push_back(chat->text);
+  }
+  REQUIRE(texts.size() == 50);
+  for (int i = 0; i < 50; ++i) CHECK(texts[static_cast<std::size_t>(i)] == std::to_string(120 + i));
 }
 
 TEST_CASE("a player flooding samples is held to the unreliable rate") {
@@ -1174,6 +1206,34 @@ TEST_CASE("a host's FLAG_RESET replaces the kept values, 0s included, and goes t
   auto snap = messages_of<FlagSnapshot>(h, 3);
   REQUIRE(snap.size() == 1);
   CHECK(snap[0].flags == std::vector<FlagEntry>{flag(5, 0), flag(6, 1)});
+}
+
+TEST_CASE("report 138 (4): a guest's old value in flight just after the host's save load is refused, its new ones go") {
+  Harness h;
+  h.join(1, "Link");
+  h.join(2, "Zelda");
+  h.receive(1, FlagState{0, {flag(5, 16), flag(6, 1)}}, kChannelProgress);
+  h.receive(1, FlagReset{0, {flag(5, 12), flag(6, 0)}}, kChannelProgress);  // the save: MaxLife 12, the boss alive
+  h.clear();
+  // Sent before player 2's game had the reset: its old 16 and its beaten boss. Refused; another flag goes on.
+  h.receive(2, FlagSet{0, {flag(5, 16), flag(6, 1), flag(7, 1)}}, kChannelProgress);
+  auto relayed = messages_of<FlagSet>(h, 1);
+  REQUIRE(relayed.size() == 1);
+  CHECK(relayed[0].flags == std::vector<FlagEntry>{flag(7, 1)});
+  CHECK(h.session.stats().reset_fenced == 2);
+  // The reset's own value, and a count change, are never refused.
+  h.clear();
+  h.receive(2, FlagSet{0, {flag(5, 12), FlagEntry{8, 0, FlagKind::count_delta, 1}}}, kChannelProgress);
+  relayed = messages_of<FlagSet>(h, 1);
+  REQUIRE(relayed.size() == 1);
+  CHECK(relayed[0].flags.size() == 2);
+  // After reset_fence_us the player's change is its own again (a heart container taken in the refight).
+  h.clear();
+  h.now += SessionConfig{}.reset_fence_us;
+  h.receive(2, FlagSet{0, {flag(5, 16)}}, kChannelProgress);
+  relayed = messages_of<FlagSet>(h, 1);
+  REQUIRE(relayed.size() == 1);
+  CHECK(relayed[0].flags == std::vector<FlagEntry>{flag(5, 16)});
 }
 
 TEST_CASE("a joiner gets the table before any flag state sent after it joined") {
@@ -6686,6 +6746,65 @@ TEST_CASE("boss-copy-b: a boss owned by a game that has not played its intro goe
   h.stand(2, 60);
   h.run(10 * kSecond);
   CHECK(messages_to<HandoverAsk>(h, 2).empty());
+}
+
+namespace {
+ObjectState boss_state(const std::string& animation) {
+  ObjectState s = state_at(0, 11);
+  s.animation = Animation{animation, 1.0f, 1.0f};
+  return s;
+}
+}  // namespace
+
+TEST_CASE("row 164 follow-up: a boss leaves an owner held in a cutscene of its own, never in the boss's own event") {
+  OwnerHarness h;
+  h.receive(1, ObjectGroup{0, {{placed(7), placed(7), object_group::boss}}}, kChannelOwnership);
+  h.receive(1, boss_presence(object_presence::awake), kChannelOwnership);
+  h.receive(2, boss_presence(object_presence::awake), kChannelOwnership);
+  h.stand(1, 3);
+  h.stand(2, 5);
+  SUBCASE("the boss fights on (its own move): asked over after fight_owner_cutscene_us") {
+    h.receive(1, ObjectSample{0, placed(7), 0, boss_state("Walk")}, kChannelObjectSamples);
+    h.receive(1, PlayerStatus{0, status::in_cutscene}, kChannelSession);  // an item get, Navi's talk
+    h.clear();
+    h.run(2 * kSecond);
+    CHECK(h.asks() == 0);  // a short event keeps it
+    h.run(2 * kSecond);
+    CHECK(messages_to<HandoverAsk>(h, 1) == std::vector<HandoverAsk>{{placed(7), 0, 2}});
+    CHECK(h.session.stats().boss_from_cutscene == 1);
+  }
+  SUBCASE("the boss plays its own event (an intro or phase change every game is in): kept") {
+    h.receive(1, ObjectSample{0, placed(7), 0, boss_state("C01-Enemy_DungeonBoss_Gohma-A-0")}, kChannelObjectSamples);
+    h.receive(1, PlayerStatus{0, status::in_cutscene}, kChannelSession);
+    h.clear();
+    h.run(6 * kSecond);
+    CHECK(h.asks() == 0);
+    CHECK(h.session.stats().boss_from_cutscene == 0);
+  }
+  SUBCASE("the other game is in a cutscene too: kept") {
+    h.receive(1, ObjectSample{0, placed(7), 0, boss_state("Walk")}, kChannelObjectSamples);
+    h.receive(1, PlayerStatus{0, status::in_cutscene}, kChannelSession);
+    h.receive(2, PlayerStatus{0, status::in_cutscene}, kChannelSession);
+    h.clear();
+    h.run(6 * kSecond);
+    CHECK(h.asks() == 0);
+  }
+}
+
+TEST_CASE("row 164 follow-up: fight_owner_cutscene_us 0 keeps a boss with an owner in a cutscene") {
+  SessionConfig config = quiet_config();
+  config.fight_owner_cutscene_us = 0;
+  OwnerHarness h(config);
+  h.receive(1, ObjectGroup{0, {{placed(7), placed(7), object_group::boss}}}, kChannelOwnership);
+  h.receive(1, boss_presence(object_presence::awake), kChannelOwnership);
+  h.receive(2, boss_presence(object_presence::awake), kChannelOwnership);
+  h.stand(1, 3);
+  h.stand(2, 5);
+  h.receive(1, ObjectSample{0, placed(7), 0, boss_state("Walk")}, kChannelObjectSamples);
+  h.receive(1, PlayerStatus{0, status::in_cutscene}, kChannelSession);
+  h.clear();
+  h.run(6 * kSecond);
+  CHECK(h.asks() == 0);
 }
 
 TEST_CASE("row 189: a ready owner that stands still keeps its boss from a game that has not begun the fight") {
