@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <string>
+#include <utility>
 
 #include "coop_colors.h"
 #include "coop_i18n.h"
@@ -281,6 +283,8 @@ std::uint32_t Shown(const CoopLook::Look& look, Part part) {
 }
 
 struct Page::Line {
+    Line(Row r, What w, Part p, std::string h, std::string c = {})
+        : row(std::move(r)), what(w), part(p), help(std::move(h)), character(std::move(c)) {}
     Row row;
     What what = What::kHeading;
     Part part = Part::tunic;
@@ -337,27 +341,25 @@ std::vector<Page::Line> Page::Lines() const {
         }
         return out;
     }
-    // The Characters rows.
-    const bool known = pick_.id.empty() ||
-                       std::any_of(custom_.begin(), custom_.end(), [&](const Character& ch) { return ch.id == pick_.id; });
-    const auto worn = [&](const std::string& id) { return (known ? pick_.id == id : id.empty()) ? "Wearing" : ""; };
-    const std::string when =
-        "Confirm wears it. The other players see it on your Link once co-op can send it (the mod-data channel); "
-        "your own Link changes at the next start.";
-    out.push_back({{"Game characters", "", 3}, What::kHeading, Part::tunic, ""});
-    out.push_back({{"Link", worn(""), 0}, What::kCharacter, Part::tunic, "Link, the game's own model. " + when, ""});
-    out.push_back({{"Custom models", "", 3}, What::kHeading, Part::tunic, ""});
-    if (custom_.empty()) {
-        out.push_back({{"None in the puppet pack yet: put a model mod in the kit's coop-models folder and start again",
-                        "", 4},
-                       What::kHeading, Part::tunic, ""});
+    // The Characters rows: only with custom models in the puppet pack (or one picked before that is gone now).
+    // Without them the page is the parts alone, as for a player who installed none.
+    if (!custom_.empty() || !pick_.id.empty()) {
+        const bool known = pick_.id.empty() || std::any_of(custom_.begin(), custom_.end(),
+                                                           [&](const Character& ch) { return ch.id == pick_.id; });
+        const auto worn = [&](const std::string& id) { return (known ? pick_.id == id : id.empty()) ? "Wearing" : ""; };
+        const std::string when =
+            "Confirm wears it. The other players who have the same model in their puppet pack see it at once; "
+            "your own Link changes at the next start.";
+        out.push_back({{"Game characters", "", 3}, What::kHeading, Part::tunic, ""});
+        out.push_back({{"Link", worn(""), 0}, What::kCharacter, Part::tunic, "Link, the game's own model. " + when, ""});
+        out.push_back({{"Custom models", "", 3}, What::kHeading, Part::tunic, ""});
+        for (const Character& ch : custom_) {
+            out.push_back({{ch.id, worn(ch.id), 0}, What::kCharacter, Part::tunic,
+                           "A custom model (" + Ages(ch) + "; the other age stays Link). " + when, ch.id});
+        }
+        out.push_back({{"See everyone as Link", pick_.everyone_link ? "On" : "Off", 1, true, true}, What::kSeeLink,
+                       Part::tunic, "On: the other players' Links stay Link on your screen, whatever model they wear."});
     }
-    for (const Character& ch : custom_) {
-        out.push_back({{ch.id, worn(ch.id), 0}, What::kCharacter, Part::tunic,
-                       "A custom model (" + Ages(ch) + "; the other age stays Link). " + when, ch.id});
-    }
-    out.push_back({{"See everyone as Link", pick_.everyone_link ? "On" : "Off", 1, true, true}, What::kSeeLink,
-                   Part::tunic, "On: the other players' Links stay Link on your screen, whatever model they wear."});
     std::string item;
     for (const PartInfo& info : CoopLook::Parts()) {
         if (item != info.item) {
@@ -427,7 +429,7 @@ void Page::Open(const CoopLook::Look& look) {
     editing_.reset();
     changed_ = false;
     if (!Selectable(selected_)) {
-        selected_ = 1;   // Link, under its heading
+        selected_ = 1;   // the first row under the first heading: Link, or without custom models the first part
     }
     const auto lines = Lines();
     if (selected_ < lines.size()) {

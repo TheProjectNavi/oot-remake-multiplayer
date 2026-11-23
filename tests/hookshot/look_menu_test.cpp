@@ -304,3 +304,42 @@ TEST_CASE("look menu (0.11.9): a character other than Link: its gear pages once 
     page.SetCharacter(0, true);                     // Link again: every page
     CHECK(page.view().rows[0].name == "Link (page 1 of 4)");
 }
+
+// Custom models (Navi, docs/puppet.md "Custom models"): the Characters rows, above the parts.
+TEST_CASE("look menu: the Characters rows show only with custom models, and Confirm wears one") {
+    using CoopLookMenu::Character;
+    using CoopLookMenu::CharacterPick;
+    Page page;
+    page.SetCharacters({}, {});
+    page.Open(Look{});
+    CHECK(RowOf(page, "Game characters", "Link") == -1);   // none installed: the parts alone
+    CHECK(page.view().rows[1].name != "Link");
+
+    page.SetCharacters({Character{"Malon", true, true}, Character{"DarkLink", false, true}}, {});
+    page.Open(Look{});
+    auto v = page.view();
+    REQUIRE(v.rows[static_cast<std::size_t>(v.selected)].name == "Link");
+    CHECK(v.rows[static_cast<std::size_t>(v.selected)].value == "Wearing");
+    CHECK(v.confirm == "Wear");
+    const int malon = RowOf(page, "Custom models", "Malon");
+    REQUIRE(malon > 0);
+    CHECK(RowOf(page, "Custom models", "DarkLink") == malon + 1);
+    CHECK_FALSE(page.TakeCharacter());
+    page.Select(static_cast<std::size_t>(malon));
+    page.Press(Input::kDecide);
+    CHECK(page.TakeCharacter() == CharacterPick{"Malon", false});
+    CHECK_FALSE(page.TakeCharacter());   // handed on once
+    CHECK(page.view().rows[static_cast<std::size_t>(malon)].value == "Wearing");
+    // The parts are all still there below.
+    int parts = 0;
+    for (const auto& r : page.view().rows) parts += r.kind == 1;
+    CHECK(parts == static_cast<int>(CoopLook::kParts) + 1);   // and "See everyone as Link"
+
+    // A model picked before that the pack no longer has: the rows stay, and Link reads as worn.
+    Page again;
+    again.SetCharacters({}, {"Gone", false});
+    again.Open(Look{});
+    v = again.view();
+    CHECK(v.rows[static_cast<std::size_t>(v.selected)].name == "Link");
+    CHECK(v.rows[static_cast<std::size_t>(v.selected)].value == "Wearing");
+}
