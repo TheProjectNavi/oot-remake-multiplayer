@@ -113,7 +113,6 @@
 #include "coop_charsel_tidy.h"
 #include "coop_look_share.h"
 #include "coop_mod_data.h"
-#include "coop_mod_data.h"
 #include "coop_ocarina_sound.h"
 #include "coop_pose.h"
 #include "coop_puppet.h"

@@ -40,7 +40,6 @@
 #include "coop_puppet_config.h"
 #include "coop_ngplus.h"
 #include "coop_save.h"
-#include <cstdlib>
 #include "coop_pause_tab.h"
 #include "coop_pvp_game.h"
 #include "coop_room_list.h"
