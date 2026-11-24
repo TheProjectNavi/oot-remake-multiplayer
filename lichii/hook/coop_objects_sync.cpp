@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "coop_field_boss.h"
 #include "coop_objects_sync.h"
 #include "coop/protocol/animation_words.hpp"
 #include "coop_sensor_claim.h"
@@ -370,7 +371,10 @@ bool IsRolled(std::string_view name) {
     // ghost) is no placement either (Graveyard_Child places only the
     // event Poe_Sharp and Poe_Flat): the game makes it near Link, so the
     // other games never had one (owner retest R6, 2026-11-14).
-    return name == "Enemy_Stalchild" || name == "Enemy_Stalchild_Big" || name == "Enemy_Poe";
+    return name == "Enemy_Stalchild" || name == "Enemy_Stalchild_Big" || name == "Enemy_Poe" ||
+           // (Navi) The field's guardian (coop_field_boss.h): made by one game, shared like the night Stalchild; only
+           // while this game is in Hyrule Field, so the same enemies elsewhere keep their own rules.
+           (CoopFieldBoss::IsBossName(name) && CoopFieldBoss::InField());
 }
 
 namespace {

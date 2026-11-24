@@ -364,7 +364,7 @@ void Start() {
     game.shared = [](std::uint8_t player, const std::string& mod_id,
                      const std::string& key) -> std::optional<std::vector<std::uint8_t>> {
         const CoopModData::SessionView v = CoopModData::Session();
-        if (v.in_session && player == v.me) {
+        if (player == 0 || (v.in_session && player == v.me)) {   // (0: our own, alone too)
             return CoopModData::Ours(mod_id, key);
         }
         return CoopModData::Of(player, mod_id, key);

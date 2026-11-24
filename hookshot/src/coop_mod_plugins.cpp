@@ -317,7 +317,7 @@ int ApiShare(const CoopModApi* self, const char* key, const void* value, std::si
 
 int ApiShared(const CoopModApi* self, std::uint8_t player, const char* key, void* out, std::size_t cap) {
     Slot* s = Slot::Of(self);
-    if (s == nullptr || !s->game->shared || !ShareKey(key) || player == 0) {
+    if (s == nullptr || !s->game->shared || !ShareKey(key)) {
         return -1;
     }
     const auto value = s->game->shared(player, s->id, key);

@@ -7,6 +7,9 @@ the existing MOD_DATA message (protocol unchanged), and MOD_DATA sent within the
 the longest-waiting first, none lost; all again every 10 seconds): lichii/hook/coop_mod_data.*, hookshot/src/coop_mod_*.
 And /fieldboss <enemy> (a test for Navi's Hyrule Field boss: the spawn director makes that enemy in front of our
 Link, in our game only, keys with bit 60): lichii/hook/coop_field_boss.*.
+And Hyrule Field's guardian: at night the field's lowest player number makes a mini-boss there, shared as a
+rolled enemy (IsRolled, in the field only), its life raised; its fall shares Navi RPG's "bossloot" (NAVI_FIELD_BOSS=0
+turns it off). CoopTime::ClockSeconds (the clock read alone too). Mod API 4's shared(): player 0 is our own value.
 
 oot-remake-multiplayer integrate-0114 (0.11.4 in the making, protocol 12) by daurosk and contributors,
 https://github.com/daurosk/oot-remake-multiplayer (GPL-3.0, LICENSE). From the source zip of the integrate-0114 branch as of

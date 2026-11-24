@@ -900,7 +900,7 @@ TEST_CASE("mod plugins v4: shared reads a player's value of this same mod only, 
     CHECK(two[1] == 8);
     CHECK(a->shared(a, 5, "offer", nullptr, 0) == 4);
     CHECK(a->shared(a, 3, "offer", out, sizeof out) == -1);
-    CHECK(a->shared(a, 0, "offer", out, sizeof out) == -1);
+    CHECK(a->shared(a, 0, "offer", out, sizeof out) == -1);   // (0: our own, and we have none yet)
     CHECK(a->shared(a, 5, "Offer", out, sizeof out) == -1);
     CHECK(a->shared(a, 5, "none", out, sizeof out) == -1);
     // Our own, as share left it.

@@ -205,9 +205,9 @@ typedef struct CoopModApi {
        id is co-op's own ("coop"). Any thread. */
     int (*share)(const struct CoopModApi *self, const char *key, const void *value, size_t size);
 
-    /* A player's newest value under `key` from their copy of this mod (player = players()'s `me`: this game's own, as
-       share left it): its length, and as much as fits into out (cap may be 0 to ask the length). -1 when that player has
-       no such value (not in the session, cleared, never set, or not arrived yet). Any thread. */
+    /* A player's newest value under `key` from their copy of this mod (player = players()'s `me`, or 0, alone too:
+       this game's own, as share left it): its length, and as much as fits into out (cap may be 0 to ask the length). -1
+       when that player has no such value (not in the session, cleared, never set, or not arrived yet). Any thread. */
     int (*shared)(const struct CoopModApi *self, uint8_t player, const char *key, void *out, size_t cap);
 } CoopModApi;
 

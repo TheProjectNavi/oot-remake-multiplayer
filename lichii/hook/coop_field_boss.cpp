@@ -2,13 +2,18 @@
 #include "coop_field_boss.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cstdlib>
+#include <limits>
+#include <random>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
 
 #include "coop/host/player_reader.hpp"
+#include "coop_mod_data.h"
 #include "coop_spawn.h"
 
 #ifdef LICHII_COOP
@@ -158,6 +163,128 @@ std::vector<std::string> Summoner::Seen(const std::map<std::uint64_t, std::uint6
     return lines;
 }
 
+// ---- the field's guardian (step 2) ----
+
+const std::vector<std::string>& BossNames() {
+    // Fighters that stand alone, strongest first; each is in the game's Pack/Actor. Not yet seen made in the field:
+    // one the game cannot make there is given up on and the next is tried.
+    static const std::vector<std::string> names = {"Enemy_IronKnuckle_Silver", "Enemy_MiddleBoss_Lizalfos",
+                                                   "Enemy_Dinolfos", "Enemy_Stalfos", "Enemy_Moblin_Club"};
+    return names;
+}
+
+bool IsBossName(std::string_view name) {
+    const auto& n = BossNames();
+    return std::find(n.begin(), n.end(), name) != n.end();
+}
+
+namespace {
+std::atomic<bool> g_in_field{false};
+}  // namespace
+
+bool InField() { return g_in_field.load(std::memory_order_relaxed); }
+
+bool IsFieldScene(std::string_view scene) {
+    return scene == "HyruleField_Child" || scene == "HyruleField_Adult" || scene == "HyruleField";
+}
+
+bool IsNight(std::uint32_t seconds) { return seconds >= 18u * 3600u || seconds < 6u * 3600u; }
+
+std::vector<std::uint8_t> LootValue(std::uint32_t event, std::uint64_t seed, std::uint8_t table) {
+    std::vector<std::uint8_t> b{1};
+    for (int i = 0; i < 4; ++i) b.push_back(static_cast<std::uint8_t>(event >> (8 * i)));
+    for (int i = 0; i < 8; ++i) b.push_back(static_cast<std::uint8_t>(seed >> (8 * i)));
+    b.push_back(table);
+    return b;
+}
+
+Boss::Out Boss::Step(const In& in) {
+    Out out;
+    if (off_) return out;
+    if (!in.night) wait_for_day_ = false;   // (a new day: the next night may have its guardian)
+    const bool lowest = in.me == 0 || std::all_of(in.in_field_too.begin(), in.in_field_too.end(),
+                                                  [&](std::uint8_t n) { return n > in.me; });
+    const auto& names = BossNames();
+    switch (phase_) {
+    case Phase::idle:
+        if (in.in_field && in.night && !in.busy && lowest && !wait_for_day_ && in.now_ms >= wait_until_ms_) {
+            if (candidate_ >= names.size()) {
+                off_ = true;
+                return out;
+            }
+            key_ = kBossKeyBit | next_key_++;
+            at_ = SpawnPoint(in.link, in.turn, kBossAheadM);
+            asked_ms_ = in.now_ms;
+            actor_ = 0;
+            raised_ = false;
+            died_ = false;
+            players_ = 1 + in.in_field_too.size();
+            phase_ = Phase::asking;
+            out.lines.push_back("fieldboss: night falls on the field: its guardian comes (" + names[candidate_] + ")");
+        }
+        break;
+    case Phase::asking:
+        if (!in.in_field) {
+            phase_ = Phase::idle;
+            wait_until_ms_ = in.now_ms + kGoneWaitMs;
+            out.lines.push_back("fieldboss: you left the field before its guardian came");
+        } else if (in.actor != 0) {
+            actor_ = in.actor;
+            phase_ = Phase::alive;
+            out.lines.push_back("fieldboss: the field's guardian is here: " + names[candidate_] + " (actor " +
+                                Hex(actor_) + ")");
+        } else if (in.now_ms - asked_ms_ >= kCreateWaitMs) {
+            out.lines.push_back("fieldboss: " + names[candidate_] + " could not be made in the field: not tried again");
+            ++candidate_;
+            phase_ = Phase::idle;
+            if (candidate_ >= names.size()) {
+                off_ = true;
+                out.lines.push_back("fieldboss: none of the guardians could be made here: no field boss this run");
+            }
+        }
+        break;
+    case Phase::alive:
+        if (in.actor != 0 && in.actor == actor_ && in.life && *in.life <= 0) died_ = true;
+        if (in.actor != 0 && in.actor == actor_ && !raised_ && in.life && in.max_life && *in.life > 0 &&
+            *in.max_life > 0) {
+            const std::int64_t target = static_cast<std::int64_t>(*in.max_life) * static_cast<std::int64_t>(3 + players_);
+            const std::int32_t to = static_cast<std::int32_t>(
+                (std::min<std::int64_t>)(target, (std::numeric_limits<std::int32_t>::max)()));
+            out.raise_to = to;
+            raised_ = true;
+            out.lines.push_back("fieldboss: its life raised from " + std::to_string(*in.max_life) + " to " +
+                                std::to_string(to) + " (" + std::to_string(players_) + " player(s) in the field)");
+        }
+        if (in.actor == 0 || in.actor != actor_) {
+            if (died_) {
+                std::random_device rd;
+                std::uint32_t event = 0;
+                while (event == 0) event = rd();
+                const std::uint64_t seed = (static_cast<std::uint64_t>(rd()) << 32) ^ rd();
+                out.loot = LootValue(event, seed, kLootTable);
+                out.lines.push_back("fieldboss: the field's guardian has fallen! Loot for everyone here (event " +
+                                    std::to_string(event) + ")");
+                wait_for_day_ = true;
+            } else {
+                out.lines.push_back("fieldboss: the field's guardian went away without falling");
+            }
+            wait_until_ms_ = in.now_ms + kGoneWaitMs;
+            phase_ = Phase::idle;
+            actor_ = 0;
+        } else if (!in.in_field) {
+            out.lines.push_back("fieldboss: you left the field: its guardian stays with the players there");
+            wait_until_ms_ = in.now_ms + kGoneWaitMs;
+            phase_ = Phase::idle;
+            actor_ = 0;
+        }
+        break;
+    }
+    if (phase_ == Phase::asking || phase_ == Phase::alive) {
+        out.want = Summoner::Want{key_, names[candidate_], at_};
+    }
+    return out;
+}
+
 // ---- the game side ----
 
 namespace {
@@ -168,7 +295,46 @@ struct State {
     std::vector<std::string> lines;
     std::optional<Command> pending;   // asked in the chat, made at the next frame (our Link is read there)
     bool active = false;              // (the director has been given a list since the last clear)
+    Boss boss;
+    std::optional<std::uint64_t> boss_key;   // the key the boss's want had last frame
 };
+
+bool BossOn() {
+#ifdef _WIN32
+    char* v = nullptr;
+    std::size_t n = 0;
+    const bool off = _dupenv_s(&v, &n, "NAVI_FIELD_BOSS") == 0 && v != nullptr && std::string(v) == "0";
+    std::free(v);
+    return !off;
+#else
+    const char* v = std::getenv("NAVI_FIELD_BOSS");
+    return v == nullptr || std::string(v) != "0";
+#endif
+}
+
+// The life of an actor (the objects sync's chain, docs/objects.md "Fields of a live actor"): its two value cells.
+constexpr std::uint64_t kActorComponents = 0x270, kComponentLife = 0x2b8, kLifeValue = 0x1c10, kLifeMax = 0x1c18;
+
+std::optional<std::uint64_t> Ptr(const Memory& m, std::uint64_t at) {
+    std::uint64_t v = 0;
+    if (at < 0x1000 || !m.read(at, &v, sizeof v) || v < 0x1000) return std::nullopt;
+    return v;
+}
+
+std::optional<std::pair<std::uint64_t, std::uint64_t>> LifeCells(const Memory& m, std::uint64_t actor) {
+    const auto table = Ptr(m, actor + kActorComponents);
+    const auto life = table ? Ptr(m, *table + kComponentLife) : std::nullopt;
+    const auto value = life ? Ptr(m, *life + kLifeValue) : std::nullopt;
+    const auto max = life ? Ptr(m, *life + kLifeMax) : std::nullopt;
+    if (!value || !max) return std::nullopt;
+    return std::make_pair(*value + 8, *max + 8);
+}
+
+std::optional<std::int32_t> ReadS32(const Memory& m, std::uint64_t at) {
+    std::int32_t v = 0;
+    if (!m.read(at, &v, sizeof v)) return std::nullopt;
+    return v;
+}
 
 State& S() {
     static State s;
@@ -236,11 +402,58 @@ bool OnChat(std::string_view text) {
     return true;
 }
 
-void Frame(std::uint64_t main_base, const std::optional<coop::host::PlayerReading>& reading, std::uint64_t now_ms) {
+void Frame(std::uint64_t main_base, const std::optional<coop::host::PlayerReading>& reading, std::uint64_t now_ms,
+           std::uint8_t me, const std::vector<OtherPlayer>& others, const Memory* memory,
+           std::optional<std::uint32_t> clock) {
     State& s = S();
     std::vector<CoopSpawn::Copy> copies;
+    static const bool boss_on = BossOn();
+    const bool in_field = main_base != 0 && reading && reading->scene && IsFieldScene(*reading->scene);
+    g_in_field.store(in_field, std::memory_order_relaxed);
     {
         std::lock_guard lock(s.mutex);
+        // The field's guardian.
+        std::optional<Summoner::Want> boss_want;
+        if (boss_on && main_base != 0 && reading) {
+            Boss::In in;
+            in.in_field = in_field;
+            in.night = clock && IsNight(*clock);
+            in.busy = reading->event_running.value_or(false) || reading->in_menu.value_or(false) ||
+                      reading->dead.value_or(false);
+            in.me = me;
+            for (const auto& o : others) {
+                if (o.number != me && o.scene && IsFieldScene(*o.scene)) in.in_field_too.push_back(o.number);
+            }
+            in.link = {reading->position[0], reading->position[1], reading->position[2]};
+            in.turn = reading->rotation;
+            in.now_ms = now_ms;
+            if (s.boss_key) {
+                const auto live = CoopSpawn::TheDirector().Live();
+                if (const auto it = live.find(*s.boss_key); it != live.end()) in.actor = it->second;
+            }
+            std::optional<std::pair<std::uint64_t, std::uint64_t>> cells;
+            if (in.actor != 0 && memory != nullptr && memory->read) {
+                cells = LifeCells(*memory, in.actor);
+                if (cells) {
+                    in.life = ReadS32(*memory, cells->first);
+                    in.max_life = ReadS32(*memory, cells->second);
+                }
+            }
+            Boss::Out out = s.boss.Step(in);
+            if (out.raise_to && cells && memory->write) {
+                const std::int32_t v = *out.raise_to;
+                const bool ok = memory->write(cells->second, &v, sizeof v) && memory->write(cells->first, &v, sizeof v);
+                out.lines.push_back(ok ? "fieldboss: life written" : "fieldboss: life NOT written (memory refused)");
+            }
+            if (out.loot) {
+                const bool shared = CoopModData::Set("navi-rpg", "bossloot", *out.loot);
+                out.lines.push_back(shared ? "fieldboss: loot event shared with Navi RPG"
+                                           : "fieldboss: loot event NOT shared (Navi RPG's values are full)");
+            }
+            for (auto& line : out.lines) Say(s, std::move(line));
+            boss_want = out.want;
+        }
+        s.boss_key = boss_want ? std::optional<std::uint64_t>(boss_want->key) : std::nullopt;
         if (s.pending) {
             if (main_base == 0 || !reading) {
                 Say(s, "fieldboss: not in a game now: try again when you are playing");
@@ -254,7 +467,7 @@ void Frame(std::uint64_t main_base, const std::optional<coop::host::PlayerReadin
             }
             s.pending.reset();
         }
-        if (s.summoner.Count() == 0 && !s.active) return;   // (nothing asked: the director is not touched)
+        if (s.summoner.Count() == 0 && !boss_want && !s.active) return;   // (nothing asked: the director is not touched)
         for (const auto& line : s.summoner.Seen(CoopSpawn::TheDirector().Live(), now_ms)) Say(s, line);
         for (const auto& w : s.summoner.Wanted()) {
             CoopSpawn::Copy c;
@@ -265,6 +478,17 @@ void Frame(std::uint64_t main_base, const std::optional<coop::host::PlayerReadin
             c.place = false;    // (made there, then never placed again: its own AI runs)
             c.remakes = 0;      // (gone is gone: killed or taken away)
             c.real = true;      // (the game's own actor, never a pack's stand-in)
+            copies.push_back(std::move(c));
+        }
+        if (boss_want) {
+            CoopSpawn::Copy c;
+            c.key = boss_want->key;
+            c.actor = boss_want->actor;
+            c.position = {boss_want->position.x, boss_want->position.y, boss_want->position.z};
+            c.act = CoopSpawn::Act::show;
+            c.place = false;
+            c.remakes = 0;
+            c.real = true;
             copies.push_back(std::move(c));
         }
         s.active = !copies.empty();

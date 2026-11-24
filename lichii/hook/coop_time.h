@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 namespace Core {
 class System;
@@ -40,5 +41,8 @@ void OnGameSet(std::uint32_t seconds, std::uint32_t mode, std::int32_t days);
 void SaveLoaded(std::uint64_t server_now_us);
 // Our Link cannot be read this frame (any load or reload).
 void Loading(std::uint64_t server_now_us);
+
+// (Navi) The game's clock, seconds since midnight, as last read (at most 5 s ago); nothing when not known. Any thread.
+std::optional<std::uint32_t> ClockSeconds();
 
 } // namespace CoopTime

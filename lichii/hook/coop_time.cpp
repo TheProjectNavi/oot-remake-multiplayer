@@ -38,6 +38,10 @@
 namespace CoopTime {
 namespace {
 
+// (Navi) The last clock read (seconds since midnight + 1; 0 none) and when (CoopEvery::NowUs), for ClockSeconds.
+std::atomic<std::uint32_t> g_last_seconds{0};
+std::atomic<std::uint64_t> g_last_read_us{0};
+
 constexpr std::uint64_t kWorldMgrPtr = 0x4e7eab0;
 constexpr std::uint64_t kTimeObject = 0x510;
 constexpr std::uint64_t kTimeFlags = 0x8;
@@ -212,6 +216,8 @@ struct Glue {
         if (seconds >= coop::protocol::kSecondsPerDay) {
             return std::nullopt;
         }
+        g_last_seconds.store(seconds + 1, std::memory_order_relaxed);
+        g_last_read_us.store(CoopEvery::NowUs(), std::memory_order_relaxed);
         return seconds;
     }
 
@@ -260,7 +266,8 @@ struct Glue {
             nudges_off_logged = false;
         }
         if (step == CoopSessionGate::Step::forget || step == CoopSessionGate::Step::idle) {
-            if (main != 0 && debug && every.Due(CoopEvery::NowUs())) {
+            // (Navi: read alone too, for ClockSeconds: the field boss comes at night, with or without a session)
+            if (main != 0 && every.Due(CoopEvery::NowUs())) {
                 (void)Read(system, main, now_us);
             }
             return;
@@ -372,6 +379,15 @@ void OnEvent(const coop::net::Event& event) {
     if (event.kind == coop::net::EventKind::message) {
         TheGlue().sync.Receive(event.message);
     }
+}
+
+std::optional<std::uint32_t> ClockSeconds() {
+    const std::uint32_t v = g_last_seconds.load(std::memory_order_relaxed);
+    const std::uint64_t at = g_last_read_us.load(std::memory_order_relaxed);
+    if (v == 0 || CoopEvery::NowUs() - at > 5'000'000) {
+        return std::nullopt;
+    }
+    return v - 1;
 }
 
 } // namespace CoopTime

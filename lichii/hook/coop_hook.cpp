@@ -1911,7 +1911,25 @@ public:
         // rooms: it reads whether our boss fight runs.
         CoopTeleport::Frame(system, view.game ? base_ : 0, reading, report.connected ? session_.get() : nullptr);
         // (Navi) /fieldboss: the enemies it asked the spawn director for (coop_field_boss.h)
-        CoopFieldBoss::Frame(view.game ? base_ : 0, reading, SteadyMs());
+        {
+            std::vector<CoopFieldBoss::OtherPlayer> others;
+            for (const auto& o : view.others) others.push_back({o.number, o.scene});
+            auto& memory = system.ApplicationMemory();
+            CoopFieldBoss::Memory m;
+            m.read = [&memory](std::uint64_t at, void* out, std::size_t n) {
+                if (at < 0x1000 || !memory.IsValidVirtualAddressRange(at, n)) return false;
+                memory.ReadBlockUnsafe(at, out, n);
+                return true;
+            };
+            m.write = [&memory](std::uint64_t at, const void* in, std::size_t n) {
+                if (at < 0x1000 || !memory.IsValidVirtualAddressRange(at, n)) return false;
+                memory.WriteBlockUnsafe(at, in, n);
+                return true;
+            };
+            CoopFieldBoss::Frame(view.game ? base_ : 0, reading, SteadyMs(),
+                                 report.connected ? CoopModData::Session().me : std::uint8_t{0}, others, &m,
+                                 CoopTime::ClockSeconds());
+        }
         for (auto& line : CoopFieldBoss::TakeLines()) {
             chat_.Add(std::move(line), true);
         }
