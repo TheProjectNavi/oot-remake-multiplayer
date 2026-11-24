@@ -220,7 +220,7 @@ TEST_CASE("fieldboss guardian: made, its life raised once, killed: loot once, th
     CHECK(b.Step(in).want);          // (the next night)
 }
 
-TEST_CASE("fieldboss guardian: a candidate not made in time is not tried again; with none left, no guardian") {
+TEST_CASE("fieldboss guardian: a candidate not made in time is not tried again, with none left, no guardian") {
     Boss b;
     std::uint64_t now = 1000;
     for (std::size_t i = 0; i < BossNames().size(); ++i) {

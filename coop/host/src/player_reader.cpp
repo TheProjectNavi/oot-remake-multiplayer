@@ -177,6 +177,19 @@ std::optional<std::int32_t> PlayerReader::read_life() {
   return quarters;
 }
 
+std::optional<std::int32_t> PlayerReader::read_max_life() {
+  const auto actor = find_player_actor();
+  if (!actor) return std::nullopt;
+  const auto parts = read_ptr(memory_, *actor + addr::kActorComponents);
+  const auto life = parts ? read_ptr(memory_, *parts + addr::kComponentLife) : std::nullopt;
+  const auto value = life ? read_ptr(memory_, *life + addr::kLifeMax) : std::nullopt;
+  const auto word = value ? read_u32(memory_, *value + addr::kLifeValueWord) : std::nullopt;
+  if (!word) return std::nullopt;
+  const auto quarters = static_cast<std::int32_t>(*word);
+  if (quarters <= 0 || quarters > protocol::kMaxLifeQuarters) return std::nullopt;
+  return quarters;
+}
+
 std::optional<bool> PlayerReader::read_event_running() {
   const auto word = read_event_word();
   const auto bound = read_link_bound();

@@ -64,6 +64,7 @@
 #include "coop_boss_scenes.h"
 #include "coop_teleport_game.h"
 #include "coop_field_boss.h"
+#include "coop_rpg_effects.h"
 #include "coop_pvp_game.h"
 #include "coop_lift_player_game.h"
 #include "coop_pvp_native_game.h"
@@ -284,6 +285,8 @@ struct FrameView {
     std::optional<std::string> scene;
     std::optional<coop::protocol::Age> age;
     std::vector<coop::overlay::Shown> others;
+    // (Navi) Our Link's life and most, quarter hearts (PlayerReader read_life, read_max_life): Navi RPG's healing.
+    std::optional<std::int32_t> life, max_life;
     std::vector<std::uint8_t> hidden;  // others with no marker (scene.hpp: hide)
     std::vector<std::uint8_t> unheard; // others whose voice is not heard (scene.hpp: voice_heard; no event counts)
     std::optional<Markers> markers;  // none: no camera
@@ -1933,6 +1936,9 @@ public:
         for (auto& line : CoopFieldBoss::TakeLines()) {
             chat_.Add(std::move(line), true);
         }
+        // (Navi) Navi RPG's items on our Link: the tonic and the charms worn (coop_rpg_effects.h)
+        CoopRpgEffects::Frame(view.game ? view.life : std::nullopt, view.game ? view.max_life : std::nullopt,
+                              SteadyMs() * 1000);
         for (auto& line : CoopBoss::TakeLines()) {
             chat_.Add(std::move(line), true);
         }
@@ -2451,6 +2457,10 @@ private:
         EmulatorMemory memory(system.ApplicationMemory(), base_);
         coop::host::PlayerReader reader(memory, &drawn_state_);
         auto reading = reader.read();
+        if (reading) {
+            view.life = reader.read_life();
+            view.max_life = view.life ? reader.read_max_life() : std::nullopt;
+        }
         // sword-3: the sword and shield as the game's own query has them
         // (coop_puppet_own.h), not as the passing request byte was seen.
         if (reading && reading->equipment && reading->equipment->drawn) {

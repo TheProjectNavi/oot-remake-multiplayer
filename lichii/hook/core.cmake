@@ -71,6 +71,7 @@ target_sources(core PRIVATE
     "${_coop_hook}/coop_settings.cpp"
     "${_coop_hook}/coop_spawn.cpp"
     "${_coop_hook}/coop_field_boss.cpp"
+    "${_coop_hook}/coop_rpg_effects.cpp"
     "${_coop_hook}/coop_svc.cpp"
     "${_coop_hook}/coop_world.cpp"
     "${_coop_hook}/coop_logic_probe.cpp"

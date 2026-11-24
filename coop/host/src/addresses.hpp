@@ -82,6 +82,9 @@ inline constexpr std::uint64_t kAsInnerController = 0x18;
 inline constexpr std::uint64_t kComponentLife = 0x2b8;
 inline constexpr std::uint64_t kLifeValue = 0x1c10;
 inline constexpr std::uint64_t kLifeValueWord = 0x8;
+// (Navi) The most life: the Life component +0x1c18, a value object of the same kind (the s32 at +8): read by
+// QueryActorLife (main+0x29afbc0) beside the life (docs/objects.md "Fields of a live actor").
+inline constexpr std::uint64_t kLifeMax = 0x1c18;
 // [dump] Controller: s32 slot count at +0x18, slot array at +0x20, 0x48 bytes
 // an entry, whose first 8 bytes point to the slot. Every reader bounds the
 // index by the count (0x3abebc0, 0x37b5d70, 0x2022a0). Checked.

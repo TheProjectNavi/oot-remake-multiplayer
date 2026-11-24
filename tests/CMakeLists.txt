@@ -129,6 +129,7 @@ add_executable(coop_tests
   lichii/cheat_items_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_cheat_items.cpp
   lichii/mod_data_test.cpp
   lichii/field_boss_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_field_boss.cpp
+  lichii/rpg_effects_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_rpg_effects.cpp
   # These hook files have no emulator code, so they are tested on their own.
   ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_boss.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../lichii/hook/coop_boss_beaten.cpp

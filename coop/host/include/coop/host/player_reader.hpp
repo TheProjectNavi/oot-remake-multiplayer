@@ -92,6 +92,8 @@ class PlayerReader {
   // The player actor's life, in quarter hearts, from its own Life component (addresses.hpp kComponentLife). Nothing
   // when a step of the walk fails, or the value is below 0 or above protocol::kMaxLifeQuarters.
   std::optional<std::int32_t> read_life();
+  // (Navi) The most life, as read_life (the Life component's +0x1c18 value). Nothing as read_life's nothing.
+  std::optional<std::int32_t> read_max_life();
   // The AS command playing in the player's main slot, its frame and rate.
   // Nothing when no command plays, or the name is not 1 to
   // protocol::kMaxAnimationChars printable ASCII characters, or the frame or
