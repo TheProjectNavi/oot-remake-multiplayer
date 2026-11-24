@@ -44,6 +44,13 @@ void SelectRow(Menu& m, const std::string& name) {
     REQUIRE(Selected(m) == name);
 }
 
+int RowOf(const Menu& m, const std::string& name) {
+    const auto names = Names(m);
+    const auto at = std::find(names.begin(), names.end(), name);
+    REQUIRE(at != names.end());
+    return static_cast<int>(at - names.begin());
+}
+
 bool Has(const Menu& m, const std::string& name) {
     const auto names = Names(m);
     return std::find(names.begin(), names.end(), name) != names.end();
@@ -966,10 +973,13 @@ TEST_CASE("pause tab: Customize Link opens the customizer, its changes are asked
     m.Press(Input::kDecide);
     CHECK(m.page() == Page::kCustomize);
     View v = m.view();
-    CHECK(v.rows[0].name == "Your name");   // (the name first, then the parts)
+    CHECK(v.rows[0].name == "Your name");   // (the name first, then the characters, then the parts)
     CHECK(v.rows[1].kind == RowKind::kHeading);
-    CHECK(v.rows[1].name == "Tunic");
-    CHECK(Selected(m) == "Kokiri Tunic");
+    CHECK(v.rows[1].name == "Game characters");   // (Navi: the Characters rows)
+    CHECK(Selected(m) == "Link");
+    const int tunic = RowOf(m, "Tunic");
+    CHECK(v.rows[static_cast<std::size_t>(tunic)].kind == RowKind::kHeading);
+    SelectRow(m, "Kokiri Tunic");
     CHECK_FALSE(m.Picture().empty());
     CHECK_FALSE(m.TakeRequest());
     m.Press(Input::kRight);   // the tunic: red
@@ -980,7 +990,7 @@ TEST_CASE("pause tab: Customize Link opens the customizer, its changes are asked
     CHECK(m.look()[CoopLook::Part::boots] == 0x112233u);   // the rest as it was worn
     CHECK(m.options().colour == "red");                     // the Settings page's row agrees
     // The mouse: a click on a part's right half.
-    m.Click(3, 1);   // Goron Tunic (Your name, Tunic, Kokiri Tunic above it)
+    m.Click(RowOf(m, "Goron Tunic"), 1);   // Goron Tunic
     CHECK(m.look()[CoopLook::Part::goron_tunic] == CoopColors::Parse("red"));
     m.Press(Input::kBack);
     CHECK(m.page() == Page::kMain);
@@ -1373,18 +1383,18 @@ TEST_CASE("pause tab: Customize Link: Your name first, typed on its row, saved, 
     m.Show(o);
     m.Open(Page::kCustomize);
     REQUIRE(m.page() == Page::kCustomize);
-    CHECK(Selected(m) == "Kokiri Tunic");
-    // Up from the first part: Your name; Up again: round to the last part; Down from there: the name again.
+    CHECK(Selected(m) == "Link");   // (Navi: the Characters rows come first)
+    // Up from the first row: Your name; Up again: round to the last part; Down from there: the name again.
     m.Press(Input::kUp);
     CHECK(Selected(m) == "Your name");
     CHECK(m.view().rows[0].value == "Link");
     CHECK(m.view().help_title == "Your name");
     m.Press(Input::kDown);
-    CHECK(Selected(m) == "Kokiri Tunic");
+    CHECK(Selected(m) == "Link");
     m.Press(Input::kUp);
     m.Press(Input::kUp);
     CHECK(Selected(m) != "Your name");
-    CHECK(Selected(m) != "Kokiri Tunic");
+    CHECK(Selected(m) != "Link");
     m.Press(Input::kDown);   // (the last part's Down: round to the list's top, its own way)
     m.Press(Input::kUp);
     // A on Your name: typing; Erase and characters; Enter keeps it and asks for a save.
@@ -1419,14 +1429,15 @@ TEST_CASE("pause tab: Customize Link: Your name first, typed on its row, saved, 
     // The mouse: a click on row 0 types the name; a click on a part ends it and picks that part.
     m.Click(0, 0);
     CHECK(m.typing());
-    m.Click(2, 0);
+    const int kokiri = RowOf(m, "Kokiri Tunic");
+    m.Click(kokiri, 0);
     CHECK_FALSE(m.typing());
-    m.Select(2);
+    m.Select(kokiri);
     CHECK(Selected(m) == "Kokiri Tunic");
     m.Select(0);
     CHECK(Selected(m) == "Your name");
     // In a colour's mixer there is no name row; Back from the list leaves the page.
-    m.Select(2);
+    m.Select(kokiri);
     m.Press(Input::kDecide);   // (A on a part: its mixer)
     CHECK(m.view().rows[0].name != "Your name");
     m.Press(Input::kBack);     // (the mixer shut)
@@ -1729,7 +1740,7 @@ TEST_CASE("pause tab: Customize Link with a Character Select character picked sa
     SelectRow(m, "Customize Link");
     m.Press(Input::kDecide);
     REQUIRE(m.page() == Page::kCustomize);
-    REQUIRE(Selected(m) == "Kokiri Tunic");
+    SelectRow(m, "Kokiri Tunic");   // (Navi: past the Characters rows)
     const std::string own = m.view().help;
     CHECK_FALSE(own.empty());
     m.SetCharacter(true);

@@ -4,7 +4,9 @@
 
 #include <filesystem>
 #include <fstream>
+#include <atomic>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <string>
 
@@ -29,8 +31,14 @@ void Put(const fs::path& p, const std::string& text) {
     std::ofstream(p, std::ios::binary) << text;
 }
 
+std::string Unique() {
+    static const unsigned run = std::random_device{}();
+    static std::atomic<int> n{0};
+    return std::to_string(run) + "-" + std::to_string(n++);
+}
+
 struct Folder {
-    fs::path root = fs::temp_directory_path() / "coop-original-test";
+    fs::path root = fs::temp_directory_path() / ("coop-original-test-" + Unique());
     fs::path mods = root / "mods";
     Folder() {
         fs::remove_all(root);
