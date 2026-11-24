@@ -1632,6 +1632,7 @@ void Menu::Decide(Act act) {
         break;
     case Act::kOpenCustomize:
         Go(Page::kCustomize);
+        customize_.SetCharacters(characters_, character_);
         customize_.Open(look_);
         customize_name_ = false;
         break;
@@ -2345,7 +2346,7 @@ View Menu::view() const {
         v.help = !note_.empty() ? JoinedTr(note_)
                  : name_row && (customize_name_ || typing_)
                      ? CoopI18n::Tr("The name the other players see over your Link and in the chat: 1 to 16 characters.")
-                 : character_ ? (c.help.empty() ? CoopI18n::Tr(kCharacterNote) : CoopI18n::Tr(c.help) + " " + CoopI18n::Tr(kCharacterNote))
+                 : character_note_ ? (c.help.empty() ? CoopI18n::Tr(kCharacterNote) : CoopI18n::Tr(c.help) + " " + CoopI18n::Tr(kCharacterNote))
                               : CoopI18n::Tr(c.help);
         v.change = c.change;
         v.confirm = c.confirm;
@@ -2571,6 +2572,11 @@ std::vector<CoopLookMenu::Shape> Menu::Picture() const {
 }
 
 void Menu::TakeCustomize() {
+    if (auto pick = customize_.TakeCharacter()) {
+        character_ = *pick;
+        request_ = Request{Request::Kind::kCharacter, {}};
+        return;
+    }
     if (auto look = customize_.TakeChange()) {
         look_ = *look;
         options_.colour = CoopLook::ColourText(look_[CoopLook::Part::tunic]);   // the Settings page's row agrees

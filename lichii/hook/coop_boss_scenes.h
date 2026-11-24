@@ -38,6 +38,10 @@
 //   others through the max rule.
 // - A boss beaten in this session: another game's new intro of it is not
 //   joined (a refight on another save in the same session plays alone).
+// - (Navi) A boss another player beat in this session, alive in our game when we come into its room later (we were
+//   not pulled in, or not in the dungeon): its death event is asked of our game (kLateTries, kMoveEveryUs apart), so
+//   our game plays the death and makes our own blue warp; its intro, if it starts, is skipped. Our game not taking
+//   it: a chat line, and the boss is fought as before. Off: SetLateDeath(false) (LICHII_COOP_BOSS_LATE_DEATH=0).
 // - The starter leaving during the intro, or no end heard for kIntroMaxUs:
 //   nobody waits for it (each intro plays to its own end).
 #pragma once
@@ -111,6 +115,7 @@ struct Local {
     std::optional<bool> boss_ours;
     // Whether the room's boss lives in our game (the object walk: life above 0; nothing when not seen). Another's
     // death is asked as the boss's own death setting only once our copy does not (player report #105).
+    // (Navi) Also read by the late death: a boss another player beat, alive in our game when we come later.
     std::optional<bool> boss_alive;
 };
 
@@ -172,6 +177,10 @@ public:
     // few frames; only a game without that hook (a stop holds it) or a copy off the walk gets here.
     static constexpr std::uint64_t kCopyWaitUs = 1'500'000;
     static constexpr float kNearStart = 6.0f;  // during the intro a joiner this near its spot is not moved
+    static constexpr unsigned kLateTries = 5;  // (Navi) the late death asked this many times at most
+
+    // (Navi) The late death on (the default) or off.
+    void SetLateDeath(bool on) { late_death_ = on; }
 
     // Network thread: BOSS_SCENE, BOSS_HEART, PLAYER_LEFT. Taken on the next Tick.
     void Receive(const coop::protocol::Message& message);
@@ -212,6 +221,10 @@ private:
         std::uint64_t wait_copy_since = 0;  // the setting waits for our copy to read dead (0: not)
         bool death_played = false;          // our game took its death (flow or setting): never a second one here
         bool refused_said = false;          // a late ask of it was logged (once per fight)
+        bool our_outro = false;      // (Navi) our game played this boss's death in this session
+        unsigned late_tries = 0;     // (Navi) the late death asked so many times
+        std::uint64_t late_at = 0;
+        bool late_gave_up = false;
     };
     struct Playing {
         std::uint8_t boss = 0;
@@ -237,6 +250,7 @@ private:
     std::optional<Playing> playing_;  // the boss event our game runs now
     bool event_ = false;
     std::optional<std::int32_t> max_life_;  // last tick's
+    bool late_death_ = true;  // (Navi) SetLateDeath
     std::uint64_t last_now_ = 0;
 
     mutable std::mutex inbox_mutex_;

@@ -31,6 +31,12 @@
 namespace nat = coop::server::nat;
 using CoopHostMenu::Target;
 
+// (Navi) The host menu hands the server this game's New Game+ level (coop_ngplus.h). coop_ngplus.cpp reads the game's
+// files, which these tests have none of: level 0, a game with no New Game+.
+namespace CoopNgPlus {
+std::uint8_t Level() { return 0; }
+}  // namespace CoopNgPlus
+
 namespace {
 
 struct EnetLife {

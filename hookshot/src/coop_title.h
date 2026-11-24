@@ -37,6 +37,10 @@ std::filesystem::path LookFile();
 // kit's coop-options.ini (else coop.ini) so the next start keeps it (the
 // title's Settings page reads the files when it opens). The calc thread.
 void SaveLook(const CoopLook::Look& look);
+// The Customize page's character (docs/puppet.md, "Custom models"): `skin` the custom model's id ("" Link),
+// written as LICHII_COOP_SKIN, and "See everyone as Link" as LICHII_COOP_SEE_LINK, in the kit's
+// coop-options.ini, else coop.ini. The kit puts your own Link's skin in place at the next start.
+void SaveCharacter(const std::string& skin, bool everyone_link);
 
 // hos_coop_title: the game's calc thread (ctx may call()).
 void OnTitle(void* ctx, std::uint64_t screen, int event);
@@ -47,6 +51,8 @@ std::uint64_t OnPad(std::uint64_t buttons, std::int32_t stick[4]);
 // in (nothing is pressed: the player loads a save themselves when the chat
 // says Success). True when the title is up now (the menu should close).
 bool StartSaveWait(const std::string& host);
+// (Navi) The title's menu is up (no file loaded): a Join is only started from there (coop_pause.cpp Join).
+bool AtTitle();
 // Co-op stopped: the title's line goes.
 void StopSaveWait();
 // A join with a file loaded went back to the title (CoopPauseTab::ToTitle): once the host's save is in and the title's

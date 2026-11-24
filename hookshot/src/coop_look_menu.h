@@ -12,6 +12,13 @@
 // (coop_look_view.h, patch 0019). This outline of Link in the colours chosen
 // is for when there is none (the title screen, a cutscene).
 //
+// Above the parts, the Characters rows (docs/puppet.md, "Custom models"):
+// "Game characters" (Link, the game's own) and "Custom models" (the skins of
+// the installed puppet pack), Confirm wears one; and "See everyone as Link".
+// A pick is handed on with TakeCharacter (the module saves it: the other
+// players see it once the mod-data channel carries it, your own Link at the
+// next start).
+//
 // This file is the page's logic only (no game, no files): the tab
 // (coop_pause_menu.h) hands it the presses and draws its View; a change is
 // handed on with TakeChange (the module: CoopLook::SetPending).
@@ -57,6 +64,21 @@ struct View {
     std::vector<Shape> picture;
 };
 
+// A custom model on the Characters rows: the skin's id (coop_puppet.json
+// "skins") and the ages it changes.
+struct Character {
+    std::string id;
+    bool child = false;
+    bool adult = false;
+};
+
+// What the Characters rows chose: the skin's id ("" for Link, the game's own)
+// and the viewer's "See everyone as Link".
+struct CharacterPick {
+    std::string id;
+    bool everyone_link = false;
+    bool operator==(const CharacterPick&) const = default;
+};
 // A colour as the mixer shows it (0.11.9: any colour): hue 0..359 degrees, saturation and brightness 0..100 %.
 struct Hsv {
     int h = 0, s = 0, v = 0;
@@ -107,6 +129,12 @@ public:
     void Click(std::size_t row, int side);
     // The look after a change, once.
     std::optional<CoopLook::Look> TakeChange();
+    // The custom models to offer and the pick worn now (a pick whose skin is not
+    // in the list shows as Link). Call before Open.
+    void SetCharacters(std::vector<Character> custom, CharacterPick pick);
+    // The pick after a change, once.
+    std::optional<CharacterPick> TakeCharacter();
+    const CharacterPick& character() const { return pick_; }
 
     const CoopLook::Look& look() const { return look_; }
     bool editing() const { return editing_.has_value(); }
@@ -127,6 +155,9 @@ private:
     void TurnPage(int step);
 
     CoopLook::Look look_;
+    std::vector<Character> custom_;
+    CharacterPick pick_;
+    bool character_changed_ = false;
     bool paged_ = false;
     std::uint16_t character_ = 0;
     bool gear_shows_ = false;

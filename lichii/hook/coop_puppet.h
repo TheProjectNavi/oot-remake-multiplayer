@@ -470,7 +470,8 @@ public:
     }
     // How long after a tunic puppet spawns its model is checked.
     static constexpr std::uint64_t kTunicModelCheckMs = 3000;
-    // CoopPuppet_<Age>_<Colour>, not the plain CoopPuppet_<Age>.
+    // CoopPuppet_<Age>_<Colour> or a skin's CoopPuppet_<Age>_Skin_<id>, not the
+    // plain CoopPuppet_<Age>: either can fail and fall back (TunicFails).
     static bool IsTunicActor(std::string_view name) {
         constexpr std::string_view kBase = "CoopPuppet_";
         return name.substr(0, kBase.size()) == kBase &&
@@ -776,6 +777,15 @@ private:
     std::set<std::string> tunic_failed_;           // guarded by tunic_mutex_
     std::map<std::string, int> tunic_timeouts_;    // by actor name
     bool tunic_proven_ = false;  // a tunic puppet spawned with its model: the pack has them
+    // Skin puppets that spawned with a model here: each skin is its own mod, so one
+    // that works proves nothing for another (and a tunic proves nothing for a skin).
+    std::set<std::string> skin_proven_;
+    static bool IsSkinActor(std::string_view name) { return name.find("_Skin_") != std::string_view::npos; }
+    // Whether a failure of this actor may still make it fall back: not once it (a skin)
+    // or any tunic puppet (a colour) has spawned with its model.
+    bool MayFail(const std::string& name) const {
+        return IsSkinActor(name) ? skin_proven_.count(name) == 0 : !tunic_proven_;
+    }
     void TunicFails(const std::string& actor, const std::string& why);
 
     mutable std::mutex input_mutex_;
@@ -837,12 +847,37 @@ struct Remote {
     // The item copy painted in the player's gear colours
     // (CoopLookShare::CopyOf): their puppet wears it.
     std::optional<std::size_t> look_copy;
+    // The custom model the player wears (docs/puppet.md, "Custom models"): the
+    // skin's id and the SHA-256 of its files, from the mod-data channel's
+    // "coop" / "skin" (MOD_DATA, coop_mod_data.h). Their puppet wears it
+    // only when this game's pack has the same skin (same id and hash).
+    std::string skin;
+    std::string skin_sha256;
     // The character they picked in the Character Select mod
     // (CoopLookShare::CharacterOf): 0 is Link.
     std::uint16_t character = 0;
     // ... and their Customize options there (CoopLookShare::CustomOf): 0 is none set.
     std::uint32_t custom = 0;
 };
+
+// One skin of the puppet pack (coop_puppet.json "skins", tools/puppet_pack/skin.py):
+// its id, the SHA-256 of its files, and the ages it has a puppet for.
+struct PackSkin {
+    std::string id;
+    std::string sha256;
+    bool child = false;
+    bool adult = false;
+    // (Navi) The skin's gear copies, coop_puppet.json "gear": {"Weapon_Sword_Master":
+    // "Weapon_Sword_Master_Skin_<id>", ...}. A puppet wearing the skin holds these in place of
+    // the game's items (DressInSkin), as the gear colours' copies (DressInLook).
+    std::vector<std::pair<std::string, std::string>> gear;
+};
+// (Navi) A skin puppet's gear: each piece the skin has a copy of becomes that copy.
+void DressInSkin(Gear& gear, const PackSkin& skin);
+// The pack's skins; none for a pack without them.
+std::vector<PackSkin> PackSkins(std::string_view manifest);
+// A skin's puppet: CoopPuppet_<Age>_Skin_<id>.
+std::string SkinActor(bool adult, std::string_view id);
 
 struct PlannerSettings {
     // The actor pack; "" picks CoopPuppet_Child or CoopPuppet_Adult by the
@@ -887,6 +922,12 @@ struct PlannerSettings {
     // quiet copy (QuietActor), which no perception sees, so a guard of this
     // game never takes another player's puppet for our Link (issue 150).
     std::vector<std::string> quiet_scenes;
+    // The pack's custom models (PackSkins). A player who wears one of them, with
+    // the same hash, gets its puppet (SkinActor), before any tunic colour.
+    std::vector<PackSkin> skins;
+    // The viewer's "See everyone as Link" (coop-options.ini LICHII_COOP_SEE_LINK):
+    // no skin puppet at all, every player in their tunic colour.
+    bool everyone_link = false;
     // Every scene, not only quiet_scenes: the runtime cannot make the reads of
     // a perceived puppet's missing Player component give 0 (Hookshot's null
     // page cannot be armed, hookshot/src/coop_null_page.h), so no puppet
@@ -999,6 +1040,11 @@ public:
     // `tunic`: the tunic copy given to the player (Remote::tunic_copy); none: the one nearest `color`.
     std::string ActorFor(bool adult, std::optional<std::uint32_t> color = {}, std::uint16_t character = 0,
                          const std::optional<std::string>& tunic = std::nullopt) const;
+    // (Navi) The player's custom model (Remote::skin, from the mod-data channel): its puppet when this game's pack
+    // has that skin for this age with the same hash, the viewer does not see everyone as Link, and it has not
+    // failed here; none otherwise (then ActorFor: Character Select's pick, the tunic colour).
+    std::optional<std::string> SkinActorFor(bool adult, const std::string& skin, const std::string& skin_sha256) const;
+    void SetEveryoneLink(bool on) { settings_.everyone_link = on; }
     void SetTunics(bool on) { settings_.tunics = on; }
     void SetGreenPuppet(bool on) { settings_.green_puppet = on; }
     // Tunic actors that do not work here (Director::FailedTunics): the plain
@@ -1018,6 +1064,8 @@ private:
 // Configure once, before the game starts (CoopSvc does it).
 void Configure(PlannerSettings settings, bool verbose, Director::Log log);
 Director& TheDirector();
+// Any thread: "See everyone as Link" now (the Customize page); the next plan follows it.
+void SetEveryoneLink(bool on);
 
 // Native puppets phase 3 (coop_lift_player.h): lifting another player. All of it does nothing until
 // WatchGamePlaces(true) (the switch LICHII_COOP_LIFT_PLAYER=1).

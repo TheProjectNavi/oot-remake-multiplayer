@@ -6454,6 +6454,23 @@ std::optional<LinkHearts> OurLife() {
     return LinkHearts{TheLife().life.load(), TheLife().max.load()};
 }
 
+std::optional<std::int32_t> RaiseLinkMax(Core::System& system, std::uint64_t actor, std::int32_t quarters) {
+    auto& memory = system.ApplicationMemory();
+    Reader r(memory);
+    const auto table = r.Ptr(actor + kActorComponents);
+    const auto life = table ? r.Ptr(*table + kComponentLife) : std::nullopt;
+    const auto max_at = life ? r.Ptr(*life + kLifeMax) : std::nullopt;
+    if (!max_at || quarters <= 0 || quarters > 80 || !memory.IsValidVirtualAddressRange(*max_at + 8, 4)) {
+        return std::nullopt;
+    }
+    const s32 max = r.Get<s32>(*max_at + 8).value_or(-1);
+    if (max <= 0 || max >= quarters) {
+        return std::nullopt;
+    }
+    memory.Write32(*max_at + 8, static_cast<u32>(quarters));
+    return max;
+}
+
 void SetMaxLife(std::optional<std::int32_t> quarters) {
     TheMaxLife().store(quarters.value_or(-1));
 }
