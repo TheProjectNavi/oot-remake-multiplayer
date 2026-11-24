@@ -10,9 +10,11 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "coop_dbno.h"
+#include "coop_field_boss.h"
 #include "coop_difficulty.h"
 #include "coop_lobby.h"
 #include "coop_pause_menu.h"
@@ -41,9 +43,10 @@ std::string Code(const std::string& text) {
 
 // One form as the page writes it ("/teleport <player>"), as a player types it.
 std::string Typed(std::string form) {
-    for (const std::string placeholder : {"<player>"}) {
+    for (const auto& [placeholder, typed] : {std::pair<std::string, std::string>{"<player>", "Saria"},
+                                             std::pair<std::string, std::string>{"<enemy>", "Enemy_Stalfos"}}) {
         for (auto at = form.find(placeholder); at != std::string::npos; at = form.find(placeholder)) {
-            form.replace(at, placeholder.size(), "Saria");
+            form.replace(at, placeholder.size(), typed);
         }
     }
     return form;
@@ -62,6 +65,9 @@ bool Taken(const std::string& text) {
     }
     if (const auto c = CoopDifficulty::ParseCommand(text)) {
         return c->kind != CoopDifficulty::Command::Kind::bad;
+    }
+    if (const auto c = CoopFieldBoss::Parse(text)) {   // (Navi)
+        return c->kind != CoopFieldBoss::Command::Kind::bad;
     }
     return false;
 }
@@ -95,7 +101,7 @@ TEST_CASE("chat commands: every command the game handles is on the Commands page
     const std::map<std::string, std::string> files = {
         {"Teleport", "lichii/hook/coop_teleport.cpp"}, {"Pvp", "lichii/hook/coop_pvp.cpp"},
         {"Dbno", "lichii/hook/coop_dbno.cpp"},         {"Difficulty", "lichii/hook/coop_difficulty.cpp"},
-        {"Lobby", "lichii/hook/coop_lobby.cpp"},
+        {"Lobby", "lichii/hook/coop_lobby.cpp"},       {"FieldBoss", "lichii/hook/coop_field_boss.cpp"},
     };
     const std::string hook = Code(ReadSource("lichii/hook/coop_hook.cpp"));
     const auto begin = hook.find("bool SendChat(const std::string& text) {");

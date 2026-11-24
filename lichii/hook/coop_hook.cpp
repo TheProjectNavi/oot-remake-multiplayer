@@ -63,6 +63,7 @@
 #include "coop_frame_clock.h"
 #include "coop_boss_scenes.h"
 #include "coop_teleport_game.h"
+#include "coop_field_boss.h"
 #include "coop_pvp_game.h"
 #include "coop_lift_player_game.h"
 #include "coop_pvp_native_game.h"
@@ -1909,6 +1910,11 @@ public:
         // /teleport <player> (docs/setup.md "Chat commands"), after the boss
         // rooms: it reads whether our boss fight runs.
         CoopTeleport::Frame(system, view.game ? base_ : 0, reading, report.connected ? session_.get() : nullptr);
+        // (Navi) /fieldboss: the enemies it asked the spawn director for (coop_field_boss.h)
+        CoopFieldBoss::Frame(view.game ? base_ : 0, reading, SteadyMs());
+        for (auto& line : CoopFieldBoss::TakeLines()) {
+            chat_.Add(std::move(line), true);
+        }
         for (auto& line : CoopBoss::TakeLines()) {
             chat_.Add(std::move(line), true);
         }
@@ -2047,6 +2053,9 @@ public:
 
     // Chat and the player list (coop_hook.h). Any thread.
     bool SendChat(const std::string& text) {
+        if (CoopFieldBoss::OnChat(text)) {
+            return true;  // (Navi) /fieldboss: this game only, its answer as notices
+        }
         if (CoopTeleport::OnChat(text, *session_)) {
             return true;  // a command: done here, its answer shows as a notice
         }

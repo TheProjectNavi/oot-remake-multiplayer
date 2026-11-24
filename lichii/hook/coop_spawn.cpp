@@ -1059,6 +1059,12 @@ void Director::SetRides(std::uint64_t main_base, std::vector<Copy> copies) {
     next_rides_ = std::move(copies);
 }
 
+void Director::SetSummons(std::uint64_t main_base, std::vector<Copy> copies) {
+    std::lock_guard lock(mutex_);
+    next_summon_base_ = main_base;
+    next_summons_ = std::move(copies);
+}
+
 void Director::SetDoomed(std::vector<Doomed> doomed) {
     if (doomed.empty()) {
         return;
@@ -1634,11 +1640,12 @@ void Director::NewFrame(CoopPuppet::Guest& guest, std::uint64_t now_ms) {
     {
         std::lock_guard lock(mutex_);
         base = next_base_ != 0 ? next_base_ : next_enemy_base_ != 0 ? next_enemy_base_ : next_drop_base_ != 0 ? next_drop_base_
-                                                                        : next_ride_base_;
+               : next_ride_base_ != 0 ? next_ride_base_ : next_summon_base_;
         copies_ = next_;
         copies_.insert(copies_.end(), next_enemies_.begin(), next_enemies_.end());
         copies_.insert(copies_.end(), next_drops_.begin(), next_drops_.end());
         copies_.insert(copies_.end(), next_rides_.begin(), next_rides_.end());
+        copies_.insert(copies_.end(), next_summons_.begin(), next_summons_.end());
     }
     if (base != base_) {
         // A new game (or none): nothing we had is ours any more.

@@ -227,6 +227,12 @@ const std::vector<Command>& Commands() {
          "place, talk to someone or read a sign within a minute to travel. Not during a cutscene, a talk or a boss "
          "fight."},
         {"/tp <player>", "The same as /teleport."},
+        // (Navi) The Hyrule Field boss, its first test (lichii/hook/coop_field_boss.cpp Parse).
+        {"/fieldboss", "Navi's test for a Hyrule Field boss: lists the enemies to try."},
+        {"/fieldboss <enemy>",
+         "Makes that enemy 6 m in front of you, in your game only, at most 3 at a time (/fieldboss "
+         "Enemy_IronKnuckle_Silver). The chat says whether the game made it, and when it is gone."},
+        {"/fieldboss clear", "Takes away the enemies /fieldboss made."},
         {"/pvp", "Says whether players can hurt each other (PvP) in this game."},
         {"/pvp on, /pvp off", "The host only: lets players hurt each other, or stops it, for everyone."},
         // Down but not out (docs/play-online.md "Down but not out"; lichii/hook/coop_dbno.cpp Parse).
