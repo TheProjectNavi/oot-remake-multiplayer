@@ -12,8 +12,10 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "mod_temp.h"
@@ -507,7 +509,7 @@ TEST_CASE("mod plugins: the sample mod (hookshot/samples/hello-mod) through the 
 
 TEST_CASE("mod plugins v2: each menu screen reaches the mods that asked, with its kind, focus and save list") {
     Run r;
-    CHECK(g.api[1]->version == 3);
+    CHECK(g.api[1]->version >= 3);   // (3 brought focused_ready; Navi's 4 keeps it)
     CHECK(g.api[1]->size >= offsetof(CoopModApi, hold_input) + sizeof(void*));
     CHECK(r.host->WantsScreens());
     g.calls.clear();
@@ -737,4 +739,187 @@ TEST_CASE("mod plugins v2: a hold made again on the next screen moves with it") 
         r.Screen(COOP_MOD_SCREEN_LOAD_LIST, "Pa_Save_00", true, 0, 0x7000);
     }
     CHECK(r.host->HeldButtons() == COOP_MOD_HOLD_ALL);
+}
+
+// ---- (API v4, Navi) players and shared values ----
+
+namespace {
+
+// The fake game's session and store, for the v4 tests.
+struct Shared {
+    CoopModPlugins::Game::Players players;
+    std::map<std::tuple<std::uint8_t, std::string, std::string>, std::vector<std::uint8_t>> values;  // player, mod, key
+    std::vector<std::string> sets;   // "mod/key=size" each share the game took
+    bool take = true;                // the store takes a share (false: over its limits)
+};
+Shared sh;
+
+void V4(Run& run) {
+    sh = Shared{};
+    run.game.players = [] { return sh.players; };
+    run.game.share = [](const std::string& mod, const std::string& key, std::vector<std::uint8_t> value) {
+        if (!sh.take) return false;
+        sh.sets.push_back(mod + "/" + key + "=" + std::to_string(value.size()));
+        const auto k = std::make_tuple(sh.players.me, mod, key);
+        if (value.empty()) {
+            sh.values.erase(k);
+        } else {
+            sh.values[k] = std::move(value);
+        }
+        return true;
+    };
+    run.game.shared = [](std::uint8_t player, const std::string& mod,
+                         const std::string& key) -> std::optional<std::vector<std::uint8_t>> {
+        const auto it = sh.values.find(std::make_tuple(player, mod, key));
+        if (it == sh.values.end()) return std::nullopt;
+        return it->second;
+    };
+}
+
+void InSession() {
+    sh.players.in_session = true;
+    sh.players.me = 2;
+    sh.players.host = 1;
+    sh.players.players = {{1, "Host"}, {2, "Taz"}, {5, "Zelda fan"}};
+}
+
+}  // namespace
+
+TEST_CASE("mod plugins v4: the table says version 4 and has the new calls") {
+    Run r(V4);
+    const CoopModApi* a = g.api[0];
+    CHECK(a->version >= 4u);
+    CHECK(a->size >= offsetof(CoopModApi, shared) + sizeof(a->shared));
+    CHECK(a->players != nullptr);
+    CHECK(a->player_name != nullptr);
+    CHECK(a->share != nullptr);
+    CHECK(a->shared != nullptr);
+}
+
+TEST_CASE("mod plugins v4: players alone, in a session, and a struct too small or missing") {
+    Run r(V4);
+    const CoopModApi* a = g.api[0];
+    CoopModPlayers p{};
+    p.size = sizeof p;
+    p.me = 9;   // (filled over: nothing of the mod's is left)
+    CHECK(a->players(a, &p) == 1);
+    CHECK(p.size == sizeof p);
+    CHECK(p.in_session == 0);
+    CHECK(p.me == 0);
+    CHECK(p.count == 0);
+
+    InSession();
+    CHECK(a->players(a, &p) == 1);
+    CHECK(p.in_session == 1);
+    CHECK(p.me == 2);
+    CHECK(p.host == 1);
+    REQUIRE(p.count == 3);
+    CHECK(p.numbers[0] == 1);
+    CHECK(p.numbers[1] == 2);
+    CHECK(p.numbers[2] == 5);
+
+    CoopModPlayers small{};
+    small.size = sizeof small - 1;
+    CHECK(a->players(a, &small) == 0);
+    CHECK(a->players(a, nullptr) == 0);
+    CHECK(a->players(nullptr, &p) == 0);
+
+    sh.players.me = 0;   // (a client not welcomed yet: no session, whatever else it says)
+    CHECK(a->players(a, &p) == 1);
+    CHECK(p.in_session == 0);
+    CHECK(p.count == 0);
+}
+
+TEST_CASE("mod plugins v4: players never writes past 16 numbers") {
+    Run r(V4);
+    InSession();
+    sh.players.players.clear();
+    for (int n = 1; n <= 20; ++n) sh.players.players.emplace_back(static_cast<std::uint8_t>(n), "p");
+    CoopModPlayers p{};
+    p.size = sizeof p;
+    CHECK(g.api[0]->players(g.api[0], &p) == 1);
+    CHECK(p.count == COOP_MOD_MAX_PLAYERS);
+    CHECK(p.numbers[15] == 16);
+}
+
+TEST_CASE("mod plugins v4: player_name gives the nickname, cut to the room given, and -1 for no such player") {
+    Run r(V4);
+    const CoopModApi* a = g.api[0];
+    char name[32];
+    CHECK(a->player_name(a, 2, name, sizeof name) == -1);   // (alone)
+    InSession();
+    CHECK(a->player_name(a, 2, name, sizeof name) == 3);
+    CHECK(std::string(name) == "Taz");
+    CHECK(a->player_name(a, 5, name, 5) == 9);   // its whole length, and what fits with the 0
+    CHECK(std::string(name) == "Zeld");
+    CHECK(a->player_name(a, 5, nullptr, 0) == 9);
+    CHECK(a->player_name(a, 3, name, sizeof name) == -1);
+    CHECK(a->player_name(a, 0, name, sizeof name) == -1);
+}
+
+TEST_CASE("mod plugins v4: share takes a good key and value under the mod's own id, and refuses the rest") {
+    Run r(V4);
+    InSession();
+    const CoopModApi* a = g.api[0];
+    const std::uint8_t v[3] = {1, 2, 3};
+    CHECK(a->share(a, "inv_1", v, 3) == 1);
+    CHECK(sh.sets == std::vector<std::string>{"alpha/inv_1=3"});
+    CHECK(a->share(a, "Inv", v, 3) == 0);        // (capitals)
+    CHECK(a->share(a, "in-v", v, 3) == 0);       // (a dash)
+    CHECK(a->share(a, "", v, 3) == 0);
+    CHECK(a->share(a, nullptr, v, 3) == 0);
+    CHECK(a->share(a, std::string(33, 'k').c_str(), v, 3) == 0);
+    CHECK(a->share(a, std::string(32, 'k').c_str(), v, 3) == 1);
+    std::uint8_t big[65] = {};
+    CHECK(a->share(a, "big", big, 65) == 0);
+    CHECK(a->share(a, "big", big, 64) == 1);
+    CHECK(a->share(a, "nul", nullptr, 2) == 0);   // (a size with no bytes)
+    CHECK(a->share(a, "inv_1", nullptr, 0) == 1); // (clears it)
+    CHECK(sh.values.count(std::make_tuple(std::uint8_t{2}, std::string("alpha"), std::string("inv_1"))) == 0);
+    sh.take = false;   // (the store is full: its limits)
+    CHECK(a->share(a, "more", v, 3) == 0);
+    CHECK(a->share(nullptr, "inv_1", v, 3) == 0);
+}
+
+TEST_CASE("mod plugins v4: shared reads a player's value of this same mod only, with its length") {
+    Run r(V4);
+    InSession();
+    const CoopModApi* a = g.api[0];
+    const CoopModApi* b = g.api[1];
+    sh.values[std::make_tuple(std::uint8_t{5}, std::string("alpha"), std::string("offer"))] = {9, 8, 7, 6};
+    sh.values[std::make_tuple(std::uint8_t{5}, std::string("bee"), std::string("offer"))] = {1};
+    std::uint8_t out[8] = {};
+    CHECK(a->shared(a, 5, "offer", out, sizeof out) == 4);
+    CHECK(out[0] == 9);
+    CHECK(out[3] == 6);
+    CHECK(b->shared(b, 5, "offer", out, sizeof out) == 1);   // (bee's own, never alpha's)
+    CHECK(out[0] == 1);
+    std::uint8_t two[2] = {};
+    CHECK(a->shared(a, 5, "offer", two, 2) == 4);   // (the whole length; what fits is copied)
+    CHECK(two[0] == 9);
+    CHECK(two[1] == 8);
+    CHECK(a->shared(a, 5, "offer", nullptr, 0) == 4);
+    CHECK(a->shared(a, 3, "offer", out, sizeof out) == -1);
+    CHECK(a->shared(a, 0, "offer", out, sizeof out) == -1);
+    CHECK(a->shared(a, 5, "Offer", out, sizeof out) == -1);
+    CHECK(a->shared(a, 5, "none", out, sizeof out) == -1);
+    // Our own, as share left it.
+    const std::uint8_t mine[2] = {4, 2};
+    CHECK(a->share(a, "offer", mine, 2) == 1);
+    CHECK(a->shared(a, 2, "offer", out, sizeof out) == 2);
+    CHECK(out[0] == 4);
+}
+
+TEST_CASE("mod plugins v4: a runtime without sessions answers alone and refuses shares") {
+    Run r;   // (no players, share or shared given)
+    const CoopModApi* a = g.api[0];
+    CoopModPlayers p{};
+    p.size = sizeof p;
+    CHECK(a->players(a, &p) == 1);
+    CHECK(p.in_session == 0);
+    char name[8];
+    CHECK(a->player_name(a, 1, name, sizeof name) == -1);
+    const std::uint8_t v = 1;
+    CHECK(a->share(a, "k", &v, 1) == 0);
+    CHECK(a->shared(a, 1, "k", name, sizeof name) == -1);
 }

@@ -24,7 +24,7 @@
 namespace CoopMods {
 
 // The plugin interface this loader serves (coop_mod_api.h COOP_MOD_API_VERSION).
-inline constexpr int kApiVersion = 3;
+inline constexpr int kApiVersion = 4;   // (Navi: 4, players and shared values)
 
 inline constexpr std::size_t kMaxId = 48;
 inline constexpr std::size_t kMaxVersion = 32;

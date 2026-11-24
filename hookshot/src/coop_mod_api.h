@@ -25,13 +25,15 @@
      (screens, buttons, the save list), never as addresses: the runtime finds the game's functions itself.
    - Version 3: inside on_screen, start one of the game's own menu sounds (play_sound); and the screen says whether its
      focused button takes a choice now (CoopModScreen's focused_ready). A mod that uses either says "api": 3, so an
-     older co-op refuses it cleanly instead of it reading past that co-op's table. */
+     older co-op refuses it cleanly instead of it reading past that co-op's table.
+   - Version 4 (Navi): who is in the co-op game (players, player_name) and small values a mod shares with the other
+     players' copies of itself (share, shared), on co-op's MOD_DATA message: no new message, the same protocol. */
 #ifndef COOP_MOD_API_H
 #define COOP_MOD_API_H
 #include <stddef.h>
 #include <stdint.h>
 
-#define COOP_MOD_API_VERSION 3u
+#define COOP_MOD_API_VERSION 4u
 
 #ifdef _WIN32
 #define COOP_MOD_EXPORT __declspec(dllexport)
@@ -93,6 +95,21 @@ typedef struct CoopModScreen {
    (the HUD is one too, as OTHER), one at a time across all mods. choose_focused, reload_save_list and hold_input work
    only inside this call. */
 typedef void (*coop_mod_screen_fn)(void *user, const CoopModScreen *screen);
+
+/* (version 4) Who is in the co-op game now, as this game's connection knows it. */
+#define COOP_MOD_MAX_PLAYERS 16
+typedef struct CoopModPlayers {
+    uint32_t size;          /* the mod sets it: sizeof this struct as the mod knows it (the runtime fills no more) */
+    int in_session;         /* 1 while this game is in a co-op game (welcomed by its server); 0 alone or reconnecting */
+    uint8_t me;             /* this game's player number, 1 to 16; 0 when not in a session */
+    uint8_t host;           /* the host's number (it can change during a game); 0 when not known */
+    uint8_t count;          /* how many numbers `numbers` holds, this game's own included */
+    uint8_t numbers[COOP_MOD_MAX_PLAYERS];   /* the players' numbers, lowest first */
+} CoopModPlayers;
+/* (version 4) share()'s limits: the MOD_DATA message's (and its server's) */
+#define COOP_MOD_SHARE_KEY_MAX 32      /* a key: 1 to 32 of a-z 0-9 _ */
+#define COOP_MOD_SHARE_VALUE_MAX 64    /* a value: 1 to 64 bytes (0 clears the key) */
+#define COOP_MOD_SHARE_KEYS 8          /* keys one mod may hold at a time */
 
 typedef struct CoopModApi {
     uint32_t size;      /* sizeof this table as the loader knows it */
@@ -167,6 +184,31 @@ typedef struct CoopModApi {
        title's Continue, "mc_TabToRight" the pause menu's tabs), letters, digits and _ only, at most 63. Only inside
        on_screen, as the version 2 calls; 1 when the game found the sound and started it. */
     int (*play_sound)(const struct CoopModApi *self, const char *name);
+
+    /* ---- Version 4 (Navi): read `version` >= 4 (or `size`) before using these. ---- */
+
+    /* Who is in the co-op game now: fills `out` (set out->size first). 1 when filled; 0 when out is NULL or too small
+       (out->size under the fields up to `numbers`). Alone, in_session is 0 and the rest 0. Any thread. */
+    int (*players)(const struct CoopModApi *self, CoopModPlayers *out);
+
+    /* A player's nickname, as their HELLO said it (yours too): its length, and as much as fits into out with a 0
+       (cap > 0); -1 when no such player is in the session. Any thread. */
+    int (*player_name)(const struct CoopModApi *self, uint8_t player, char *out, size_t cap);
+
+    /* This mod's own value under `key`, for the other players' copies of this same mod (its mod.json "id"): the newest
+       one is kept per player, mod and key, by their games and by the server, which gives a player who joins everyone's
+       and forgets a player's values when it leaves. Not a stream of messages: only the newest value is ever seen, and
+       one set twice in a quarter second may never be seen at all (the other side sees the second). Values go out a few
+       a second, all mods together (the server takes at most 4 a second from a game), and all of them again every 10
+       seconds; a value set alone (no session) goes out when the game joins one. size 0 clears the key. 1 when taken;
+       0 when the key is not 1 to 32 of a-z 0-9 _, the value is over 64 bytes, it would be the mod's 9th key, or the mod's
+       id is co-op's own ("coop"). Any thread. */
+    int (*share)(const struct CoopModApi *self, const char *key, const void *value, size_t size);
+
+    /* A player's newest value under `key` from their copy of this mod (player = players()'s `me`: this game's own, as
+       share left it): its length, and as much as fits into out (cap may be 0 to ask the length). -1 when that player has
+       no such value (not in the session, cleared, never set, or not arrived yet). Any thread. */
+    int (*shared)(const struct CoopModApi *self, uint8_t player, const char *key, void *out, size_t cap);
 } CoopModApi;
 
 /* The mod's exports. coop_mod_start: once, when the co-op module starts, before any callback; return 1 to stay on,

@@ -232,6 +232,104 @@ int ApiSetting(const CoopModApi* self, const char* key, char* out, std::size_t c
     return -1;
 }
 
+// ---- (API v4, Navi) players and shared values ----
+
+bool ShareKey(const char* key) {
+    if (key == nullptr) {
+        return false;
+    }
+    const std::size_t n = std::strlen(key);
+    if (n == 0 || n > COOP_MOD_SHARE_KEY_MAX) {
+        return false;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+        const char c = key[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int ApiPlayers(const CoopModApi* self, CoopModPlayers* out) {
+    Slot* s = Slot::Of(self);
+    if (s == nullptr || out == nullptr || out->size < sizeof(CoopModPlayers)) {
+        return 0;
+    }
+    const std::uint32_t size = out->size;
+    std::memset(out, 0, sizeof(CoopModPlayers));
+    out->size = size;
+    if (!s->game->players) {
+        return 1;   // (a runtime without sessions: alone)
+    }
+    const Game::Players p = s->game->players();
+    if (!p.in_session || p.me == 0) {
+        return 1;
+    }
+    out->in_session = 1;
+    out->me = p.me;
+    out->host = p.host;
+    for (const auto& player : p.players) {
+        if (out->count >= COOP_MOD_MAX_PLAYERS) {
+            break;
+        }
+        out->numbers[out->count++] = player.first;
+    }
+    return 1;
+}
+
+int ApiPlayerName(const CoopModApi* self, std::uint8_t player, char* out, std::size_t cap) {
+    Slot* s = Slot::Of(self);
+    if (s == nullptr || !s->game->players) {
+        return -1;
+    }
+    const Game::Players p = s->game->players();
+    if (!p.in_session) {
+        return -1;
+    }
+    for (const auto& entry : p.players) {
+        if (entry.first == player) {
+            const std::string& name = entry.second;
+            if (out != nullptr && cap > 0) {
+                const std::size_t n = name.size() < cap - 1 ? name.size() : cap - 1;
+                std::memcpy(out, name.data(), n);
+                out[n] = 0;
+            }
+            return static_cast<int>(name.size());
+        }
+    }
+    return -1;
+}
+
+int ApiShare(const CoopModApi* self, const char* key, const void* value, std::size_t size) {
+    Slot* s = Slot::Of(self);
+    if (s == nullptr || !s->on || !s->game->share || !ShareKey(key) || size > COOP_MOD_SHARE_VALUE_MAX ||
+        (size > 0 && value == nullptr)) {
+        return 0;
+    }
+    if (s->id == "coop") {
+        return 0;   // (co-op's own values, the skin: never a mod's)
+    }
+    const auto* bytes = static_cast<const std::uint8_t*>(value);
+    std::vector<std::uint8_t> v(bytes, bytes + size);
+    return s->game->share(s->id, key, std::move(v)) ? 1 : 0;
+}
+
+int ApiShared(const CoopModApi* self, std::uint8_t player, const char* key, void* out, std::size_t cap) {
+    Slot* s = Slot::Of(self);
+    if (s == nullptr || !s->game->shared || !ShareKey(key) || player == 0) {
+        return -1;
+    }
+    const auto value = s->game->shared(player, s->id, key);
+    if (!value) {
+        return -1;
+    }
+    if (out != nullptr && cap > 0) {
+        std::memcpy(out, value->data(), value->size() < cap ? value->size() : cap);
+    }
+    return static_cast<int>(value->size());
+}
+
 // Registration: only inside the mod's own coop_mod_start.
 Slot* Registering(const CoopModApi* self, const void* fn, const char* what) {
     Slot* s = Slot::Of(self);
@@ -512,6 +610,10 @@ bool Host::Begin(Slot& s, const CoopMods::Mod& m) {
     api.reload_save_list = ApiReloadSaveList;
     api.hold_input = ApiHoldInput;
     api.play_sound = ApiPlaySound;
+    api.players = ApiPlayers;
+    api.player_name = ApiPlayerName;
+    api.share = ApiShare;
+    api.shared = ApiShared;
 
     s.starting = true;
     s.on = true;

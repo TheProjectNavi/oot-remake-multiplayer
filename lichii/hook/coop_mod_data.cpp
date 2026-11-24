@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "coop_mod_data.h"
 
+#include <algorithm>
 #include <mutex>
+#include <set>
 #include <utility>
 
 #include "coop/host/session.hpp"
@@ -61,9 +63,26 @@ bool Store::Set(const std::string& mod_id, const std::string& key, Bytes value) 
         if (it != ours_.end()) {
             ours_.erase(it);
             due_[k] = true;
+            cleared_[k] = false;
         }
         return true;
     }
+    if (it == ours_.end()) {
+        // (Navi) A new key: within the server's limits, or the server drops it without a word.
+        std::size_t keys = 0;
+        std::set<std::string> mods;
+        for (const auto& entry : ours_) {
+            mods.insert(std::get<0>(entry.first));
+            if (std::get<0>(entry.first) == mod_id) {
+                ++keys;
+            }
+        }
+        if (keys >= coop::protocol::kMaxModDataKeys ||
+            (mods.count(mod_id) == 0 && mods.size() >= coop::protocol::kMaxModDataMods)) {
+            return false;
+        }
+    }
+    cleared_.erase(k);
     if (it == ours_.end() || it->second != value) {
         ours_[k] = std::move(value);
         due_[k] = true;
@@ -82,6 +101,9 @@ bool Store::OnEvent(const coop::net::Event& event) {
         for (const auto& [k, v] : ours_) {
             due_[k] = true;
         }
+        // (Navi) A new connection: the server holds none of ours, so a cleared key needs no empty value any more
+        // (a clear still waiting to go stays due: sending it is harmless).
+        cleared_.clear();
         return had;
     }
     case EventKind::player_left:
@@ -109,13 +131,53 @@ bool Store::OnEvent(const coop::net::Event& event) {
 
 std::vector<ModData> Store::TakeSend(std::uint64_t now_ms) {
     std::vector<ModData> out;
-    if (due_.empty() || (sent_once_ && now_ms - last_send_ms_ < kSendEveryMs)) {
+    // (Navi) Every kRefreshMs all of ours again (and the clears of this session), so a value the server dropped is
+    // right again within that time.
+    if (!sent_once_ || now_ms < last_refresh_ms_ || now_ms - last_refresh_ms_ >= kRefreshMs) {
+        if (sent_once_) {
+            for (const auto& entry : ours_) {
+                due_[entry.first] = true;
+            }
+            // A clear goes out once more, at the first refresh after it, then is forgotten: a cleared key never
+            // takes the budget for long.
+            for (auto it = cleared_.begin(); it != cleared_.end();) {
+                if (it->second) {
+                    it = cleared_.erase(it);
+                } else {
+                    due_[it->first] = true;
+                    it->second = true;
+                    ++it;
+                }
+            }
+        }
+        last_refresh_ms_ = now_ms;
+    }
+    if (due_.empty() || (sent_once_ && now_ms >= last_send_ms_ && now_ms - last_send_ms_ < kSendEveryMs)) {
         return out;
     }
+    // (Navi) At most kSendBudget in any kBudgetWindowMs: the server's limit, all mods together.
+    std::erase_if(window_, [&](std::uint64_t t) { return now_ms < t || now_ms - t >= kBudgetWindowMs; });
+    if (window_.size() >= kSendBudget) {
+        return out;
+    }
+    const std::size_t room = kSendBudget - window_.size();
+    std::vector<Key> keys;
     for (const auto& [k, due] : due_) {
-        if (!due) {
-            continue;
+        if (due) {
+            keys.push_back(k);
         }
+    }
+    // The longest-waiting first (never sent: first of all), then in key order: a value that changes all the time
+    // cannot keep the others waiting.
+    const auto sent_at = [&](const Key& k) {
+        const auto it = sent_ms_.find(k);
+        return it == sent_ms_.end() ? std::uint64_t{0} : it->second + 1;
+    };
+    std::stable_sort(keys.begin(), keys.end(), [&](const Key& a, const Key& b) { return sent_at(a) < sent_at(b); });
+    if (keys.size() > room) {
+        keys.resize(room);
+    }
+    for (const Key& k : keys) {
         ModData d;
         d.mod_id = std::get<0>(k);
         d.key = std::get<1>(k);
@@ -123,11 +185,24 @@ std::vector<ModData> Store::TakeSend(std::uint64_t now_ms) {
             d.value = it->second;
         }
         out.push_back(std::move(d));
+        due_.erase(k);
+        sent_ms_[k] = now_ms;
+        window_.push_back(now_ms);
     }
-    due_.clear();
-    last_send_ms_ = now_ms;
-    sent_once_ = true;
+    std::erase_if(due_, [](const auto& entry) { return !entry.second; });
+    if (!out.empty()) {
+        last_send_ms_ = now_ms;
+        sent_once_ = true;
+    }
     return out;
+}
+
+std::optional<Bytes> Store::Ours(const std::string& mod_id, const std::string& key) const {
+    const auto it = ours_.find(Key{mod_id, key});
+    if (it == ours_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 std::optional<Bytes> Store::Of(std::uint8_t player, const std::string& mod_id, const std::string& key) const {
@@ -146,7 +221,36 @@ namespace {
 std::mutex g_mutex;
 Store g_store;   // guarded
 bool g_connected = false;   // guarded: sends wait for a session
+SessionView g_view;         // guarded: (Navi) who is in the session
 }  // namespace
+
+SessionView ViewOf(bool in_session, std::uint8_t me, std::uint8_t host,
+                   std::vector<std::pair<std::uint8_t, std::string>> players) {
+    SessionView v;
+    if (!in_session || me == 0) {
+        return v;   // (not in a session: no one, not even ourselves)
+    }
+    v.in_session = true;
+    v.me = me;
+    v.host = host;
+    std::sort(players.begin(), players.end());
+    players.erase(std::unique(players.begin(), players.end(),
+                              [](const auto& a, const auto& b) { return a.first == b.first; }),
+                  players.end());
+    std::erase_if(players, [](const auto& p) { return p.first == 0 || p.first > coop::protocol::kMaxPlayers; });
+    v.players = std::move(players);
+    return v;
+}
+
+std::optional<Bytes> Ours(const std::string& mod_id, const std::string& key) {
+    std::lock_guard lock(g_mutex);
+    return g_store.Ours(mod_id, key);
+}
+
+SessionView Session() {
+    std::lock_guard lock(g_mutex);
+    return g_view;
+}
 
 bool Set(const std::string& mod_id, const std::string& key, Bytes value) {
     std::lock_guard lock(g_mutex);
@@ -159,7 +263,6 @@ std::optional<Bytes> Of(std::uint8_t player, const std::string& mod_id, const st
 }
 
 void OnEvent(const coop::net::Event& event, coop::net::Client& client) {
-    (void)client;
     bool changed = false;
     {
         std::lock_guard lock(g_mutex);
@@ -168,6 +271,26 @@ void OnEvent(const coop::net::Event& event, coop::net::Client& client) {
             g_connected = true;
         } else if (event.kind == EventKind::disconnected || event.kind == EventKind::refused) {
             g_connected = false;
+        }
+        // (Navi) Who is in the session, after each event that can change it (players() and host_number() are
+        // already updated when the event comes).
+        switch (event.kind) {
+        case EventKind::welcomed:
+        case EventKind::reconnected:
+        case EventKind::disconnected:
+        case EventKind::refused:
+        case EventKind::player_joined:
+        case EventKind::player_left:
+        case EventKind::host_changed: {
+            std::vector<std::pair<std::uint8_t, std::string>> players;
+            for (const auto& p : client.players()) {
+                players.emplace_back(p.number, p.nickname);
+            }
+            g_view = ViewOf(g_connected, client.player_number(), client.host_number(), std::move(players));
+            break;
+        }
+        default:
+            break;
         }
     }
 #ifdef LICHII_COOP

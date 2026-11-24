@@ -194,7 +194,7 @@ COOP_MOD_EXPORT int coop_mod_start(const CoopModApi *a) {
 }
 ```
 
-The table (version 1, and versions 2 and 3 below): `log`, `main_base`, `read`, `write` (guest addresses; offsets in our docs are from `main_base`), `setting`, `on_frame`, `on_overlay` (rectangles and text over the picture), `on_key` (key downs on Hookshot), `on_setting`, `hook` and `has_hook` (game functions of the runtime's hook list, before and after, with the registers), `restart_needed`. Register only inside `coop_mod_start`. Keep each callback short; never wait on the game. Calls that take `self` want the table you were given. A later version only adds entries at the end: check `api->version`.
+The table (version 1, and versions 2, 3 and 4 below): `log`, `main_base`, `read`, `write` (guest addresses; offsets in our docs are from `main_base`), `setting`, `on_frame`, `on_overlay` (rectangles and text over the picture), `on_key` (key downs on Hookshot), `on_setting`, `hook` and `has_hook` (game functions of the runtime's hook list, before and after, with the registers), `restart_needed`. Register only inside `coop_mod_start`. Keep each callback short; never wait on the game. Calls that take `self` want the table you were given. A later version only adds entries at the end: check `api->version`.
 
 Mods are loaded first row first and started at the first frame. `coop_mod_stop` (optional) runs at exit.
 
@@ -220,6 +220,16 @@ Version 3 adds two things to the menu screens. A mod that uses either says `"api
 - `screen->focused_ready` is 1 when the focused button takes a choice now: the title has Continue focused while its opening scene plays and its menu fades in, and it is 0 then (the player's first A goes to the title, to bring its menu in). Read it only when the table's `version` is 3 or more.
 
 The mod never sees an address: the module finds the game's functions itself (the button's decide, the save list's read, the screens' classes). The same entries are meant to carry over to the add-on interface of co-op 1.0, where only the runtime under them changes. On Hookshot the screens come through patch 0030's menu screen hook; no other game patch is needed.
+
+### Players and shared values (version 4, Navi)
+
+Version 4 lets a mod see who is in the co-op game and share small values with the other players' copies of itself. It rides on co-op's own MOD_DATA message (the one the custom models use), so there is no new message and the protocol is unchanged. A mod that uses it says `"api": 4` in `mod.json`; a co-op that serves only version 3 refuses it cleanly.
+
+- `players(api, &p)` fills a `CoopModPlayers` (set `p.size = sizeof p` first): `in_session`, this game's number `me`, the host's number `host` (the host can change during a game), and the players' numbers, lowest first, this game's own included. Alone, everything is 0. `player_name(api, number, out, cap)` gives a player's nickname.
+- `share(api, key, value, size)` sets this mod's own value under `key` (1 to 32 of `a-z 0-9 _`, at most 64 bytes, at most 8 keys a mod; size 0 clears it). `shared(api, player, key, out, cap)` reads a player's newest value of the same mod (your own with your number), -1 when there is none. Values are keyed by the mod's `id`, so one mod never reads another's.
+- **Only the newest value counts.** The server and every game keep the newest value per player, mod and key, give a joiner everyone's, and forget a player's values when they leave. A value set twice within a quarter second may never be seen in between: build what you share as state ("my offer is X", "I accepted offer 7"), never as a stream of events.
+- **Sending is paced.** The server takes at most 4 MOD_DATA a second from a game and drops the rest without a word. Co-op sends at most 3 a second for all mods together, the longest-waiting value first; a value over that budget waits for the next second and is never lost. Every 10 seconds all of a game's values go out again, so one dropped on the way is right again within that time. (Before, a value sent over the server's budget was gone until it changed again.)
+- All four calls work on any thread.
 
 A whole sample is in `hookshot/samples/hello-mod` (`mod.json` + `hello_mod.c`; the tests build it as `hello_mod.dll`): copy both files into `mods\hello-mod`, start the game, and F7 shows its message in the corner.
 

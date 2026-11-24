@@ -18,7 +18,9 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "coop_mod_api.h"
@@ -48,6 +50,19 @@ struct Game {
     std::function<bool()> reload_save_list;
     std::function<bool(void* ctx, std::uint64_t screen, const std::string& name)> play_sound;
     std::function<std::uint64_t()> now_ms;  // a steady clock (the input hold's end)
+    // (API v4, Navi) Who is in the session, and the mods' shared values (co-op's MOD_DATA, lichii/hook/coop_mod_data.h).
+    struct Players {
+        bool in_session = false;
+        std::uint8_t me = 0;
+        std::uint8_t host = 0;
+        std::vector<std::pair<std::uint8_t, std::string>> players;   // number and nickname, lowest number first
+    };
+    std::function<Players()> players;
+    // Our value for mod and key ({} clears it); false when not taken (the store's limits).
+    std::function<bool(const std::string& mod_id, const std::string& key, std::vector<std::uint8_t> value)> share;
+    // A player's value for mod and key (our own when `player` is our number); nothing when there is none.
+    std::function<std::optional<std::vector<std::uint8_t>>(std::uint8_t player, const std::string& mod_id,
+                                                           const std::string& key)> shared;
 };
 
 // (API v2) One menu screen's update, as the runtime read it.

@@ -16,6 +16,7 @@
 #include <monocypher.h>
 
 #include "coop_hook.h"
+#include "coop_mod_data.h"
 #include "coop_mod_plugins.h"
 #include "coop_mod_screens.h"
 #include "coop_mod_share.h"
@@ -347,6 +348,27 @@ void Start() {
         return true;
     };
     game.now_ms = SteadyMs;
+    // (API v4, Navi) players and shared values: co-op's own session view and MOD_DATA store (coop_mod_data.h)
+    game.players = [] {
+        const CoopModData::SessionView v = CoopModData::Session();
+        CoopModPlugins::Game::Players p;
+        p.in_session = v.in_session;
+        p.me = v.me;
+        p.host = v.host;
+        p.players = v.players;
+        return p;
+    };
+    game.share = [](const std::string& mod_id, const std::string& key, std::vector<std::uint8_t> value) {
+        return CoopModData::Set(mod_id, key, std::move(value));
+    };
+    game.shared = [](std::uint8_t player, const std::string& mod_id,
+                     const std::string& key) -> std::optional<std::vector<std::uint8_t>> {
+        const CoopModData::SessionView v = CoopModData::Session();
+        if (v.in_session && player == v.me) {
+            return CoopModData::Ours(mod_id, key);
+        }
+        return CoopModData::Of(player, mod_id, key);
+    };
     g_host = std::make_unique<CoopModPlugins::Host>(*g_loader, CoopModPlugins::SystemLibrary(), std::move(game));
     g_pending = true;  // started at the first frame: the exe has told its hooks by then
 }
