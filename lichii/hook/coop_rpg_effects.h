@@ -26,12 +26,16 @@ struct PlayerReading;
 namespace CoopRpgEffects {
 
 inline constexpr std::uint16_t kTonic = 8, kVigor = 7, kGuardian = 6, kSecondWind = 5;
+inline constexpr std::uint16_t kVigorPlus = 9, kGuardianPlus = 10, kSecondWindPlus = 11;   // (the upgrades)
+inline constexpr std::uint64_t kVigorPlusMs = 4000;
+inline constexpr std::int32_t kWindPlusAtOrBelow = 8;   // two hearts
 inline constexpr std::uint64_t kVigorMs = 6000, kGuardianMs = 1000, kWindMs = 1000;
 inline constexpr std::int32_t kWindAtOrBelow = 4;   // one heart, in quarters
 inline constexpr std::uint64_t kPendingMs = 2000;   // a raise asked: counted as done, or given up, after this
 
 struct Worn {
     bool vigor = false, guardian = false, second_wind = false;
+    bool vigor_plus = false, guardian_plus = false, second_wind_plus = false;
     bool operator==(const Worn&) const = default;
 };
 struct Use {

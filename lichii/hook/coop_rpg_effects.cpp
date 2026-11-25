@@ -21,6 +21,9 @@ std::optional<Worn> DecodeWear(const std::vector<std::uint8_t>& b) {
         w.vigor = w.vigor || item == kVigor;
         w.guardian = w.guardian || item == kGuardian;
         w.second_wind = w.second_wind || item == kSecondWind;
+        w.vigor_plus = w.vigor_plus || item == kVigorPlus;
+        w.guardian_plus = w.guardian_plus || item == kGuardianPlus;
+        w.second_wind_plus = w.second_wind_plus || item == kSecondWindPlus;
     }
     return w;
 }
@@ -58,11 +61,13 @@ Effects::Out Effects::Step(const In& in) {
         vigor_at_ = wind_at_ = in.now_ms;
         return out;
     }
-    // A hit taken: half of it back later.
-    if (in.worn.guardian && last_life_ && *last_life_ > life) {
-        back_.emplace_back(in.now_ms + kGuardianMs, (*last_life_ - life + 1) / 2);
+    // A hit taken: half of it back later (three quarters with the upgrade; the better one counts).
+    const bool guardian = in.worn.guardian || in.worn.guardian_plus;
+    if (guardian && last_life_ && *last_life_ > life) {
+        const std::int32_t hit = *last_life_ - life;
+        back_.emplace_back(in.now_ms + kGuardianMs, in.worn.guardian_plus ? (hit * 3 + 3) / 4 : (hit + 1) / 2);
     }
-    if (!in.worn.guardian) back_.clear();
+    if (!guardian) back_.clear();
     if (last_life_ && *last_life_ > life && pending_to_ >= 0) {
         out.drop_ask = true;   // (an ask still waiting would heal the hit away: asked again from the new life)
         pending_to_ = -1;
@@ -83,15 +88,16 @@ Effects::Out Effects::Step(const In& in) {
             ++it;
         }
     }
-    if (in.worn.vigor && life < max) {
-        if (in.now_ms - vigor_at_ >= kVigorMs) {
+    if ((in.worn.vigor || in.worn.vigor_plus) && life < max) {
+        if (in.now_ms - vigor_at_ >= (in.worn.vigor_plus ? kVigorPlusMs : kVigorMs)) {
             to += 1;
             vigor_at_ = in.now_ms;
         }
     } else {
         vigor_at_ = in.now_ms;   // (the first quarter comes kVigorMs after a hurt)
     }
-    if (in.worn.second_wind && life <= kWindAtOrBelow && life < max) {
+    if (((in.worn.second_wind && life <= kWindAtOrBelow) || (in.worn.second_wind_plus && life <= kWindPlusAtOrBelow)) &&
+        life < max) {
         if (in.now_ms - wind_at_ >= kWindMs) {
             to += 1;
             wind_at_ = in.now_ms;

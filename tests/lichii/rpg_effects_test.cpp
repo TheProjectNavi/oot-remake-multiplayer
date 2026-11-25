@@ -131,3 +131,24 @@ TEST_CASE("rpg effects: a hit while a heal waits takes the heal back, so the hit
     CHECK_FALSE(f.Step(At(5, 0, 1000, w)).raise_to);
     CHECK_FALSE(f.Step(At(0, 20, 100000, w)).raise_to);
 }
+
+TEST_CASE("rpg effects: the upgraded charms: Vigor+ every 4 s, Guardian+ three quarters back, Second Wind+ at two hearts") {
+    CHECK(DecodeWear({1, 3, 9, 0, 10, 0, 11, 0})->vigor_plus);
+    Effects v;
+    Worn w;
+    w.vigor_plus = true;
+    v.Step(At(10, 20, 1000, w));
+    CHECK_FALSE(v.Step(At(10, 20, 1000 + kVigorPlusMs - 1, w)).raise_to);
+    CHECK(v.Step(At(10, 20, 1000 + kVigorPlusMs, w)).raise_to == 11);
+    Effects g;
+    Worn gw;
+    gw.guardian_plus = true;
+    g.Step(At(20, 20, 1000, gw));
+    g.Step(At(12, 20, 1100, gw));   // (hit for 8: 6 back)
+    CHECK(g.Step(At(12, 20, 1100 + kGuardianMs, gw)).raise_to == 18);
+    Effects s;
+    Worn sw;
+    sw.second_wind_plus = true;
+    s.Step(At(8, 20, 1000, sw));
+    CHECK(s.Step(At(8, 20, 1000 + kWindMs, sw)).raise_to == 9);   // (two hearts: it works)
+}

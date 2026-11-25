@@ -188,6 +188,13 @@ bool IsFieldScene(std::string_view scene) {
     return scene == "HyruleField_Child" || scene == "HyruleField_Adult" || scene == "HyruleField";
 }
 
+std::uint8_t AreaTable(std::string_view scene) {
+    if (IsFieldScene(scene)) return kLootTable;
+    if (scene == "GerudoValley_Child" || scene == "GerudoValley_Adult") return 3;              // Navi RPG's Gerudo table
+    if (scene == "DeathMountainTrail_Child" || scene == "DeathMountainTrail_Adult") return 4;  // its Death Mountain one
+    return 0;
+}
+
 bool IsNight(std::uint32_t seconds) { return seconds >= 18u * 3600u || seconds < 6u * 3600u; }
 
 std::vector<std::uint8_t> LootValue(std::uint32_t event, std::uint64_t seed, std::uint8_t table) {
@@ -219,8 +226,11 @@ Boss::Out Boss::Step(const In& in) {
             raised_ = false;
             died_ = false;
             players_ = 1 + in.in_field_too.size();
+            elite_ = made_ % kEliteEvery == kEliteEvery - 1;
+            table_ = in.table;
             phase_ = Phase::asking;
-            out.lines.push_back("fieldboss: night falls on the field: its guardian comes (" + names[candidate_] + ")");
+            out.lines.push_back(std::string("fieldboss: night falls: ") + (elite_ ? "an ELITE guardian" : "a guardian") +
+                                " comes (" + names[candidate_] + ")");
         }
         break;
     case Phase::asking:
@@ -231,6 +241,7 @@ Boss::Out Boss::Step(const In& in) {
         } else if (in.actor != 0) {
             actor_ = in.actor;
             phase_ = Phase::alive;
+            ++made_;
             out.lines.push_back("fieldboss: the field's guardian is here: " + names[candidate_] + " (actor " +
                                 Hex(actor_) + ")");
         } else if (in.now_ms - asked_ms_ >= kCreateWaitMs) {
@@ -247,7 +258,8 @@ Boss::Out Boss::Step(const In& in) {
         if (in.actor != 0 && in.actor == actor_ && in.life && *in.life <= 0) died_ = true;
         if (in.actor != 0 && in.actor == actor_ && !raised_ && in.life && in.max_life && *in.life > 0 &&
             *in.max_life > 0) {
-            const std::int64_t target = static_cast<std::int64_t>(*in.max_life) * static_cast<std::int64_t>(3 + players_);
+            const std::int64_t target = static_cast<std::int64_t>(*in.max_life) *
+                                        static_cast<std::int64_t>(3 + players_) * (elite_ ? kEliteLife : 1);
             const std::int32_t to = static_cast<std::int32_t>(
                 (std::min<std::int64_t>)(target, (std::numeric_limits<std::int32_t>::max)()));
             out.raise_to = to;
@@ -261,9 +273,9 @@ Boss::Out Boss::Step(const In& in) {
                 std::uint32_t event = 0;
                 while (event == 0) event = rd();
                 const std::uint64_t seed = (static_cast<std::uint64_t>(rd()) << 32) ^ rd();
-                out.loot = LootValue(event, seed, kLootTable);
-                out.lines.push_back("fieldboss: the field's guardian has fallen! Loot for everyone here (event " +
-                                    std::to_string(event) + ")");
+                out.loot = LootValue(event, seed, elite_ ? kEliteTable : table_);
+                out.lines.push_back(std::string("fieldboss: the ") + (elite_ ? "ELITE " : "") +
+                                    "guardian has fallen! Loot for everyone here (event " + std::to_string(event) + ")");
                 wait_for_day_ = true;
             } else {
                 out.lines.push_back("fieldboss: the field's guardian went away without falling");
@@ -408,7 +420,8 @@ void Frame(std::uint64_t main_base, const std::optional<coop::host::PlayerReadin
     State& s = S();
     std::vector<CoopSpawn::Copy> copies;
     static const bool boss_on = BossOn();
-    const bool in_field = main_base != 0 && reading && reading->scene && IsFieldScene(*reading->scene);
+    const std::uint8_t area_table = main_base != 0 && reading && reading->scene ? AreaTable(*reading->scene) : 0;
+    const bool in_field = area_table != 0;   // (any guardian area: the field, the valley, the trail)
     g_in_field.store(in_field, std::memory_order_relaxed);
     {
         std::lock_guard lock(s.mutex);
@@ -417,12 +430,15 @@ void Frame(std::uint64_t main_base, const std::optional<coop::host::PlayerReadin
         if (boss_on && main_base != 0 && reading) {
             Boss::In in;
             in.in_field = in_field;
+            in.table = area_table != 0 ? area_table : kLootTable;
             in.night = clock && IsNight(*clock);
             in.busy = reading->event_running.value_or(false) || reading->in_menu.value_or(false) ||
                       reading->dead.value_or(false);
             in.me = me;
             for (const auto& o : others) {
-                if (o.number != me && o.scene && IsFieldScene(*o.scene)) in.in_field_too.push_back(o.number);
+                if (in_field && o.number != me && o.scene && reading->scene && *o.scene == *reading->scene) {
+                    in.in_field_too.push_back(o.number);   // (in the same guardian area as us)
+                }
             }
             in.link = {reading->position[0], reading->position[1], reading->position[2]};
             in.turn = reading->rotation;

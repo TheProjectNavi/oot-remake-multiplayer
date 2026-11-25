@@ -275,3 +275,41 @@ TEST_CASE("fieldboss guardian: its names are rolled spawns for the objects sync 
     Frame(0, std::nullopt, 1200);
     CHECK_FALSE(InField());
 }
+
+TEST_CASE("fieldboss guardian: the areas and their tables, and every third guardian is elite with its table") {
+    CHECK(AreaTable("HyruleField_Child") == kLootTable);
+    CHECK(AreaTable("GerudoValley_Adult") == 3);
+    CHECK(AreaTable("DeathMountainTrail_Child") == 4);
+    CHECK(AreaTable("KakarikoVillage_Child") == 0);
+    Boss b;
+    std::uint64_t now = 1000;
+    for (int n = 0; n < 3; ++n) {
+        auto in = Night(now);
+        in.table = 3;   // (Gerudo Valley)
+        in.night = true;
+        if (n > 0) {   // (a day between: one guardian a night)
+            in.night = false;
+            b.Step(in);
+            in.night = true;
+        }
+        REQUIRE(b.Step(in).want);
+        in.actor = 0x100 + static_cast<std::uint64_t>(n);
+        in.life = 10;
+        in.max_life = 10;
+        b.Step(in);                       // (made)
+        const auto raised = b.Step(in);   // (its life raised)
+        REQUIRE(raised.raise_to);
+        CHECK(*raised.raise_to == (n == 2 ? 10 * 4 * kEliteLife : 40));   // (alone: 4 times; the third, twice that)
+        in.life = 0;
+        b.Step(in);
+        in.actor = 0;
+        in.life.reset();
+        in.max_life.reset();
+        now += 100;
+        in.now_ms = now;
+        const auto out = b.Step(in);
+        REQUIRE(out.loot);
+        CHECK(out.loot->at(13) == (n == 2 ? kEliteTable : 3));
+        now += kGoneWaitMs + 1;
+    }
+}

@@ -45,6 +45,13 @@ inline constexpr float kBossAheadM = 20.0f;
 inline constexpr std::uint64_t kGoneWaitMs = 30'000;     // a boss that went without dying: again after this
 inline constexpr std::uint64_t kBossKeyBit = kKeyBit | (std::uint64_t{1} << 40);   // (apart from /fieldboss's keys)
 inline constexpr std::uint8_t kLootTable = 1;            // Navi RPG's "Field guardian" table (rpg_loot.cpp)
+inline constexpr std::uint8_t kEliteTable = 2;           // its "Elite guardian" table
+inline constexpr std::size_t kEliteEvery = 3;            // every third guardian made this run is elite
+inline constexpr std::int64_t kEliteLife = 2;            // an elite's life: this many times a guardian's
+
+// The places a guardian comes (each its own loot table): Hyrule Field, Gerudo Valley, Death Mountain Trail.
+// 0: none.
+std::uint8_t AreaTable(std::string_view scene);
 
 // The boss's candidates, in the order tried.
 const std::vector<std::string>& BossNames();
@@ -118,6 +125,7 @@ public:
         std::uint64_t now_ms = 0;
         std::uint64_t actor = 0;               // the director's live actor for the boss's key (0: none)
         std::optional<std::int32_t> life, max_life;   // read from it
+        std::uint8_t table = kLootTable;       // the area's loot table (AreaTable)
     };
     struct Out {
         std::optional<Summoner::Want> want;    // what the director should keep making
@@ -141,6 +149,9 @@ private:
     std::uint64_t wait_until_ms_ = 0;
     bool wait_for_day_ = false;
     bool off_ = false;                         // every candidate failed
+    std::size_t made_ = 0;                     // guardians made this run (every kEliteEvery-th is elite)
+    bool elite_ = false;
+    std::uint8_t table_ = kLootTable;
 };
 
 // ---- the game side (coop_field_boss.cpp) ----
