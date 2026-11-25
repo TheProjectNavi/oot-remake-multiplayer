@@ -480,4 +480,16 @@ bool FileSelectRuns() {
     return g_running && g_host->FileSelectRuns();
 }
 
+std::vector<std::string> MenuTabs() {
+    return g_running && g_host ? g_host->MenuTabs() : std::vector<std::string>{};
+}
+
+bool MenuPage(std::size_t tab, CoopModMenuPage* out) {
+    return g_running && g_host && g_host->MenuPage(tab, out);
+}
+
+bool MenuInput(std::size_t tab, int event, int arg, int arg2) {
+    return g_running && g_host && g_host->MenuInput(tab, event, arg, arg2);
+}
+
 }  // namespace CoopModsRuntime

@@ -116,6 +116,11 @@ public:
 
     // The ids of the mods running now, in load order.
     std::vector<std::string> Running() const;
+    // (API v5, Navi) The menu tabs of the mods running now (their names, in load order), a tab's page, a press on it.
+    // Each call into a mod is guarded as the others: a mod that crashes in one is switched off.
+    std::vector<std::string> MenuTabs() const;
+    bool MenuPage(std::size_t tab, CoopModMenuPage* out);
+    bool MenuInput(std::size_t tab, int event, int arg, int arg2);
 
     struct Slot;  // one loaded mod (coop_mod_plugins.cpp)
 

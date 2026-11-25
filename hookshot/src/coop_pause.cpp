@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "coop_mods_runtime.h"
 #include "coop_pause.h"
 
 #include <atomic>
@@ -1306,12 +1307,64 @@ void Tick() {
 constexpr int kLobbyTab = 1;
 constexpr int kModsTab = 2;
 
+// Tab 3 and on (Navi, mod API 5): the code mods' own tabs (CoopModsRuntime::MenuTabs), after Mods.
+constexpr int kFirstModTab = 3;
+
 int Tabs() {
-    return CoopModsTab::Available() ? 3 : 2;
+    if (!CoopModsTab::Available()) return 2;
+    return kFirstModTab + static_cast<int>(CoopModsRuntime::MenuTabs().size());
 }
+
+namespace {
+// (Navi) A mod tab's page, as Hookshot draws one: the rows copied (their texts are the mod's, kept until its next
+// call on this thread), the help box.
+bool ModTabPage(int tab, HosCoopMenuPage* out) {
+    if (out == nullptr || out->size < sizeof(HosCoopMenuPage)) return false;
+    CoopModMenuPage page{};
+    page.size = sizeof page;
+    if (!CoopModsRuntime::MenuPage(static_cast<std::size_t>(tab - kFirstModTab), &page)) return false;
+    thread_local std::vector<HosCoopMenuRow> rows;
+    rows.clear();
+    for (int i = 0; i < page.rows_n; ++i) {
+        const CoopModMenuRow& r = page.rows[i];
+        HosCoopMenuRow h{};
+        h.name = r.name != nullptr ? r.name : "";
+        h.value = r.value != nullptr ? r.value : "";
+        h.kind = r.kind <= HOS_COOP_MENU_NOTE ? r.kind : static_cast<std::uint8_t>(HOS_COOP_MENU_NOTE);
+        h.on = r.on;
+        h.left = r.left;
+        h.right = r.right;
+        h.fixed = r.fixed;
+        rows.push_back(h);
+    }
+    const std::uint32_t size = out->size;
+    *out = HosCoopMenuPage{};
+    out->size = size;
+    out->rows_n = static_cast<std::int32_t>(rows.size());
+    out->rows = rows.data();
+    out->selected = page.selected >= 0 && page.selected < out->rows_n ? page.selected : -1;
+    out->help_title = page.help_title != nullptr ? page.help_title : "";
+    out->help = page.help != nullptr ? page.help : "";
+    out->hint = page.hint != nullptr ? page.hint : "";
+    out->gold = "";
+    out->change = "Change";
+    out->confirm = "Confirm";
+    out->back = "Back";
+    return true;
+}
+}  // namespace
 
 const char* TabName(int tab) {
     const char* en = nullptr;
+    if (tab >= kFirstModTab && CoopModsTab::Available()) {
+        // (a mod's own name, as the mod gave it: copied at once by Hookshot, as the others)
+        const auto tabs = CoopModsRuntime::MenuTabs();
+        const auto i = static_cast<std::size_t>(tab - kFirstModTab);
+        if (i >= tabs.size()) return nullptr;
+        thread_local std::string mod_name;
+        mod_name = tabs[i];
+        return mod_name.c_str();
+    }
     if (tab == kModsTab && CoopModsTab::Available()) {
         en = CoopModsTab::TabName();
     } else if (tab == kLobbyTab) {
@@ -1330,6 +1383,9 @@ const char* TabName(int tab) {
 }
 
 bool Page(int tab, HosCoopMenuPage* out) {
+    if (tab >= kFirstModTab) {
+        return ModTabPage(tab, out);
+    }
     if (tab == kModsTab) {
         return Translated(CoopModsTab::Page(out), out);
     }
@@ -1427,6 +1483,9 @@ static void ModsPaste(bool into_typing) {
 }
 
 bool Input(int tab, int event, int arg, int arg2) {
+    if (tab >= kFirstModTab) {
+        return CoopModsRuntime::MenuInput(static_cast<std::size_t>(tab - kFirstModTab), event, arg, arg2);
+    }
     if (tab == kModsTab) {
         const bool taken = CoopModsTab::MenuInput(event, arg, arg2);
         if (CoopModsTab::TakePasteRequest()) {   // a text row's Paste (pad: Left / Right; mouse: its sides)

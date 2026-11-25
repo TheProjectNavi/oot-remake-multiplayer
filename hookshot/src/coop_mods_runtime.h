@@ -4,6 +4,12 @@
 // loader.
 #pragma once
 
+#include <cstddef>
+#include <string>
+#include <vector>
+
+#include "coop_mod_api.h"
+
 #include <cstdint>
 #include <functional>
 
@@ -50,5 +56,11 @@ std::uint64_t HeldButtons();
 // that asked for the game's menu screens (the title's own menu then has one Start row, CoopTitleMenu::MenuFor). Any
 // other menu-screen mod is not one. Takes no lock of co-op's.
 bool FileSelectRuns();
+
+// (API v5, Navi) The code mods' menu tabs (coop_mod_plugins.h Host::MenuTabs, MenuPage, MenuInput); none while the
+// mods do not run.
+std::vector<std::string> MenuTabs();
+bool MenuPage(std::size_t tab, CoopModMenuPage* out);
+bool MenuInput(std::size_t tab, int event, int arg, int arg2);
 
 }  // namespace CoopModsRuntime

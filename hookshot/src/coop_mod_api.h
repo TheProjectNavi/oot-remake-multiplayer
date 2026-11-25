@@ -27,13 +27,15 @@
      focused button takes a choice now (CoopModScreen's focused_ready). A mod that uses either says "api": 3, so an
      older co-op refuses it cleanly instead of it reading past that co-op's table.
    - Version 4 (Navi): who is in the co-op game (players, player_name) and small values a mod shares with the other
-     players' copies of itself (share, shared), on co-op's MOD_DATA message: no new message, the same protocol. */
+     players' copies of itself (share, shared), on co-op's MOD_DATA message: no new message, the same protocol.
+   - Version 5 (Navi): a mod's own tab in co-op's menus (on_menu): its page of rows, drawn as co-op's own tabs are,
+     and the presses on it. */
 #ifndef COOP_MOD_API_H
 #define COOP_MOD_API_H
 #include <stddef.h>
 #include <stdint.h>
 
-#define COOP_MOD_API_VERSION 4u
+#define COOP_MOD_API_VERSION 5u
 
 #ifdef _WIN32
 #define COOP_MOD_EXPORT __declspec(dllexport)
@@ -110,6 +112,52 @@ typedef struct CoopModPlayers {
 #define COOP_MOD_SHARE_KEY_MAX 32      /* a key: 1 to 32 of a-z 0-9 _ */
 #define COOP_MOD_SHARE_VALUE_MAX 64    /* a value: 1 to 64 bytes (0 clears the key) */
 #define COOP_MOD_SHARE_KEYS 8          /* keys one mod may hold at a time */
+
+/* (version 5) A mod's tab in co-op's menus (on_menu): Hookshot's menu (beside Multiplayer, Lobby and Mods) and the
+   game's pause menu. The kinds and events are the menu's own (gpu/vk/hos_coop_menu.h). */
+enum {
+    COOP_MOD_MENU_ACTION = 0,    /* a name and a value with no arrows: Confirm does it */
+    COOP_MOD_MENU_CHOICE = 1,    /* a value with arrows (left / right: it can go that way) */
+    COOP_MOD_MENU_TOGGLE = 2,    /* Off / On (on) */
+    COOP_MOD_MENU_HEADING = 3,   /* a section's title: not selectable */
+    COOP_MOD_MENU_NOTE = 4       /* a line of text: not selectable */
+};
+typedef struct CoopModMenuRow {
+    const char *name;
+    const char *value;   /* ACTION, CHOICE: the value's text ("" or NULL: none) */
+    uint8_t kind;        /* COOP_MOD_MENU_* above */
+    uint8_t on;          /* TOGGLE */
+    uint8_t left, right; /* CHOICE: the arrows */
+    uint8_t fixed;       /* it cannot be used now (drawn dim) */
+    uint8_t pad_[3];
+} CoopModMenuRow;
+typedef struct CoopModMenuPage {
+    uint32_t size;                /* set by the runtime: sizeof this struct as it knows it */
+    int32_t rows_n;
+    const CoopModMenuRow *rows;   /* the mod's own memory: read before the mod's next page call on that thread */
+    int32_t selected;             /* -1: none */
+    const char *help_title;       /* the help box: a title, a paragraph, a line under it (each "" or NULL: none) */
+    const char *help;
+    const char *hint;
+} CoopModMenuPage;
+/* The presses (the menu's own numbers): */
+enum {
+    COOP_MOD_MENU_UP = 0,
+    COOP_MOD_MENU_DOWN = 1,
+    COOP_MOD_MENU_LEFT = 2,
+    COOP_MOD_MENU_RIGHT = 3,
+    COOP_MOD_MENU_CONFIRM = 4,
+    COOP_MOD_MENU_BACK = 5,      /* answer 0 when the page has nothing to go back to: the menu closes */
+    COOP_MOD_MENU_SHOW = 6,      /* the tab came to show */
+    COOP_MOD_MENU_HIDE = 7,      /* it shows no more */
+    COOP_MOD_MENU_SELECT = 8,    /* the mouse over row `arg` */
+    COOP_MOD_MENU_CLICK = 9      /* a click on row `arg`: arg2 -1 the value's left half, 1 its right half, 0 the name */
+};
+/* The page now: fill `out` (keep its size), 1 when filled. The menu's thread (the game may be paused: the frame
+   callback may not run while the menu is up, so a page must not wait for it). */
+typedef int (*coop_mod_menu_page_fn)(void *user, CoopModMenuPage *out);
+/* A press on the tab: 1 when taken. The menu's thread. */
+typedef int (*coop_mod_menu_input_fn)(void *user, int event, int arg, int arg2);
 
 typedef struct CoopModApi {
     uint32_t size;      /* sizeof this table as the loader knows it */
@@ -209,6 +257,13 @@ typedef struct CoopModApi {
        this game's own, as share left it): its length, and as much as fits into out (cap may be 0 to ask the length). -1
        when that player has no such value (not in the session, cleared, never set, or not arrived yet). Any thread. */
     int (*shared)(const struct CoopModApi *self, uint8_t player, const char *key, void *out, size_t cap);
+
+    /* ---- Version 5 (Navi): read `version` >= 5 (or `size`) before using it. ---- */
+
+    /* A tab of this mod's own in co-op's menus, named `tab_name` (1 to 24 characters), after co-op's tabs; at most one
+       a mod. Registration, only inside coop_mod_start. 1 when taken. */
+    int (*on_menu)(const struct CoopModApi *self, const char *tab_name, coop_mod_menu_page_fn page,
+                   coop_mod_menu_input_fn input, void *user);
 } CoopModApi;
 
 /* The mod's exports. coop_mod_start: once, when the co-op module starts, before any callback; return 1 to stay on,

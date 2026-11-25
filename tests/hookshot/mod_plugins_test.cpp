@@ -127,6 +127,40 @@ int StartCrash(const CoopModApi* api) {
     return 1;
 }
 
+// (API v5, Navi) A mod with a menu tab: its page (two rows, the second selected) and the presses it took.
+struct MenuSeen {
+    std::vector<std::string> presses;
+    int crash_page = 0;
+    int bad_name = 0;
+    CoopModMenuRow rows[2] = {{"Items", "3", COOP_MOD_MENU_ACTION, 0, 0, 0, 0, {}},
+                              {"Wear", "", COOP_MOD_MENU_TOGGLE, 1, 0, 0, 0, {}}};
+};
+MenuSeen menu_seen;
+
+int MenuPageFn(void*, CoopModMenuPage* out) {
+    if (menu_seen.crash_page) throw std::runtime_error("boom");
+    out->rows_n = 2;
+    out->rows = menu_seen.rows;
+    out->selected = 1;
+    out->help_title = "RPG";
+    out->help = "help";
+    return 1;
+}
+int MenuInputFn(void*, int event, int arg, int arg2) {
+    menu_seen.presses.push_back(std::to_string(event) + " " + std::to_string(arg) + " " + std::to_string(arg2));
+    return event == COOP_MOD_MENU_BACK ? 0 : 1;
+}
+int StartMenu(const CoopModApi* api) {
+    if (menu_seen.bad_name) {
+        CHECK(api->on_menu(api, "", MenuPageFn, MenuInputFn, nullptr) == 0);
+        CHECK(api->on_menu(api, std::string(25, 'x').c_str(), MenuPageFn, MenuInputFn, nullptr) == 0);
+        CHECK(api->on_menu(api, "RPG", MenuPageFn, nullptr, nullptr) == 0);
+    }
+    CHECK(api->on_menu(api, "RPG", MenuPageFn, MenuInputFn, nullptr) == 1);
+    CHECK(api->on_menu(api, "Second", MenuPageFn, MenuInputFn, nullptr) == 0);   // (one a mod)
+    return 1;
+}
+
 // The fake libraries: a file's stem names the exports it has.
 struct Fake {
     std::map<std::string, void*> exports;
@@ -138,6 +172,7 @@ std::map<std::string, Fake>& Fakes() {
         {"no", {{{COOP_MOD_START_EXPORT, reinterpret_cast<void*>(&StartNo)}}}},
         {"crash", {{{COOP_MOD_START_EXPORT, reinterpret_cast<void*>(&StartCrash)}}}},
         {"empty", {}},
+        {"menu", {{{COOP_MOD_START_EXPORT, reinterpret_cast<void*>(&StartMenu)}}}},
     };
     return f;
 }
@@ -922,4 +957,42 @@ TEST_CASE("mod plugins v4: a runtime without sessions answers alone and refuses 
     const std::uint8_t v = 1;
     CHECK(a->share(a, "k", &v, 1) == 0);
     CHECK(a->shared(a, 1, "k", name, sizeof name) == -1);
+}
+
+
+// ---- (API v5, Navi) a mod's menu tab ----
+
+TEST_CASE("mod plugins v5: a mod's menu tab: named, its page read, the presses handed on") {
+    menu_seen = MenuSeen{};
+    Run r([](Run& run) { run.folder.Code("3-menu", "menu", "menu.dll"); });
+    CHECK(g.api[0]->version >= 5u);
+    REQUIRE(r.host->MenuTabs() == std::vector<std::string>{"RPG"});
+    CoopModMenuPage page{};
+    page.size = sizeof page;
+    REQUIRE(r.host->MenuPage(0, &page));
+    CHECK(page.size == sizeof page);
+    REQUIRE(page.rows_n == 2);
+    CHECK(std::string(page.rows[0].name) == "Items");
+    CHECK(page.rows[1].kind == COOP_MOD_MENU_TOGGLE);
+    CHECK(page.selected == 1);
+    CHECK(std::string(page.help_title) == "RPG");
+    CHECK(r.host->MenuInput(0, COOP_MOD_MENU_CONFIRM, 1, 0));
+    CHECK_FALSE(r.host->MenuInput(0, COOP_MOD_MENU_BACK, 0, 0));   // (nothing to go back to: the menu closes)
+    CHECK(menu_seen.presses == std::vector<std::string>{"4 1 0", "5 0 0"});
+    CHECK_FALSE(r.host->MenuPage(1, &page));   // (no second tab)
+    CHECK_FALSE(r.host->MenuInput(7, 0, 0, 0));
+}
+
+TEST_CASE("mod plugins v5: a bad tab is refused, and a mod that crashes in its page is switched off") {
+    menu_seen = MenuSeen{};
+    menu_seen.bad_name = 1;
+    Run r([](Run& run) { run.folder.Code("3-menu", "menu", "menu.dll"); });
+    CHECK(r.Logged("asked for a menu tab it cannot have"));
+    REQUIRE(r.host->MenuTabs().size() == 1);
+    menu_seen.crash_page = 1;
+    CoopModMenuPage page{};
+    page.size = sizeof page;
+    CHECK_FALSE(r.host->MenuPage(0, &page));
+    CHECK(r.Logged("crashed in its menu page"));
+    CHECK(r.host->MenuTabs().empty());   // (off: its tab is gone)
 }

@@ -4,6 +4,7 @@
 
 #include "coop_mod_screens.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <type_traits>
@@ -56,6 +57,13 @@ struct Host::Slot {
     std::vector<Callback<coop_mod_setting_fn>> setting;
     std::vector<std::pair<std::uint32_t, Callback<coop_mod_hook_fn>>> hook;
     std::vector<Callback<coop_mod_screen_fn>> screen;  // (API v2)
+    struct Menu {   // (API v5) its menu tab
+        std::string name;
+        coop_mod_menu_page_fn page = nullptr;
+        coop_mod_menu_input_fn input = nullptr;
+        void* user = nullptr;
+    };
+    std::vector<Menu> menu;
     bool file_select = false;                          // (its mod.json's "file_select")
     std::atomic<std::uint64_t> hold{0};                // (API v2) the buttons it holds from the game
     // (API v2) The screen the hold was set on (object and kind) and when that screen last updated: the hold ends when
@@ -157,6 +165,28 @@ struct ScreenCall {
 void RunScreen(void* p) {
     auto* c = static_cast<ScreenCall*>(p);
     c->fn(c->user, c->screen);
+}
+
+struct MenuPageCall {
+    coop_mod_menu_page_fn fn;
+    void* user;
+    CoopModMenuPage* out;
+    int result;
+};
+void RunMenuPage(void* p) {
+    auto* c = static_cast<MenuPageCall*>(p);
+    c->result = c->fn(c->user, c->out);
+}
+
+struct MenuInputCall {
+    coop_mod_menu_input_fn fn;
+    void* user;
+    int event, arg, arg2;
+    int result;
+};
+void RunMenuInput(void* p) {
+    auto* c = static_cast<MenuInputCall*>(p);
+    c->result = c->fn(c->user, c->event, c->arg, c->arg2);
 }
 
 struct StartCall {
@@ -375,6 +405,25 @@ int ApiHook(const CoopModApi* self, std::uint32_t hook, coop_mod_hook_fn fn, voi
 int ApiOnScreen(const CoopModApi* self, coop_mod_screen_fn fn, void* user) {
     Slot* s = Registering(self, reinterpret_cast<const void*>(fn), "screen");
     return s != nullptr ? (s->screen.push_back({fn, user}), 1) : 0;
+}
+
+// (API v5, Navi) A tab of the mod's own: a name of 1 to 24 printable characters, both calls, one a mod.
+int ApiOnMenu(const CoopModApi* self, const char* tab_name, coop_mod_menu_page_fn page, coop_mod_menu_input_fn input,
+              void* user) {
+    Slot* s = Registering(self, reinterpret_cast<const void*>(page), "menu");
+    if (s == nullptr || input == nullptr || tab_name == nullptr) {
+        return 0;
+    }
+    const std::string name(tab_name);
+    const bool printable = std::all_of(name.begin(), name.end(), [](char c) {
+        return static_cast<unsigned char>(c) >= 0x20 && c != 0x7f;
+    });
+    if (name.empty() || name.size() > 24 || !printable || !s->menu.empty()) {
+        s->Say("asked for a menu tab it cannot have (a name of 1 to 24 characters, one tab a mod): refused");
+        return 0;
+    }
+    s->menu.push_back({name, page, input, user});
+    return 1;
 }
 
 // (API v2) The mod inside its own on_screen call, or nullptr (logged once per mod).
@@ -614,6 +663,7 @@ bool Host::Begin(Slot& s, const CoopMods::Mod& m) {
     api.player_name = ApiPlayerName;
     api.share = ApiShare;
     api.shared = ApiShared;
+    api.on_menu = ApiOnMenu;
 
     s.starting = true;
     s.on = true;
@@ -630,6 +680,7 @@ bool Host::Begin(Slot& s, const CoopMods::Mod& m) {
         s.setting.clear();
         s.hook.clear();
         s.screen.clear();
+        s.menu.clear();
         s.stop = nullptr;
         s.Say(problem);
         loader_.NoteCode(m.name, problem);
@@ -836,6 +887,72 @@ void Host::Screen(const ScreenUpdate& update) {
     }
     t_slot = nullptr;
     t_update = nullptr;
+}
+
+std::vector<std::string> Host::MenuTabs() const {
+    std::vector<std::string> out;
+    if (!started_ || stopped_) {
+        return out;
+    }
+    for (const auto& s : slots_) {
+        if (!s->on) continue;
+        for (const auto& m : s->menu) out.push_back(m.name);
+    }
+    return out;
+}
+
+namespace {
+// The n-th menu tab of the mods on now (as MenuTabs lists them): its slot and entry, or nothing.
+template <class Slots>
+std::pair<Slot*, const Slot::Menu*> MenuAt(Slots& slots, std::size_t tab) {
+    std::size_t i = 0;
+    for (auto& s : slots) {
+        if (!s->on) continue;
+        for (const auto& m : s->menu) {
+            if (i++ == tab) return {s.get(), &m};
+        }
+    }
+    return {nullptr, nullptr};
+}
+}  // namespace
+
+bool Host::MenuPage(std::size_t tab, CoopModMenuPage* out) {
+    if (!started_ || stopped_ || out == nullptr) {
+        return false;
+    }
+    const auto [s, m] = MenuAt(slots_, tab);
+    if (s == nullptr) {
+        return false;
+    }
+    const std::uint32_t size = out->size;
+    *out = CoopModMenuPage{};
+    out->size = size;
+    out->selected = -1;
+    MenuPageCall c{m->page, m->user, out, 0};
+    if (!Guarded(RunMenuPage, &c)) {
+        s->Crashed("menu page");
+        return false;
+    }
+    if (c.result != 1 || out->rows_n < 0 || (out->rows_n > 0 && out->rows == nullptr)) {
+        return false;
+    }
+    return true;
+}
+
+bool Host::MenuInput(std::size_t tab, int event, int arg, int arg2) {
+    if (!started_ || stopped_) {
+        return false;
+    }
+    const auto [s, m] = MenuAt(slots_, tab);
+    if (s == nullptr) {
+        return false;
+    }
+    MenuInputCall c{m->input, m->user, event, arg, arg2, 0};
+    if (!Guarded(RunMenuInput, &c)) {
+        s->Crashed("menu input");
+        return false;
+    }
+    return c.result == 1;
 }
 
 std::uint64_t Host::HeldButtons() {
