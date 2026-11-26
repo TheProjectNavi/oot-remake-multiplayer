@@ -5,7 +5,7 @@ game's own look. Made from the player's own game files, as the puppets are.
 
 Writes into the puppet mod's romfs:
   UI/Layout2Archive/Common.Product.100.Nin_Ounce_NVN2.blarc.zs
-      MenuOverlay_00.buil (the tab strip): the - menu's tabs of ours (Pa_Category_04..06) and their page,
+      MenuOverlay_00.buil (the tab strip): the - menu's tabs of ours (Pa_Category_04..07; Navi: RPG the fourth) and their page,
           Pa_CoopMinus_00: a part of the System page's layout where a shown + page sits (add_minus_page)
       PlusMenu_00.buil (the pages): Pa_Settings_00, a copy of the System page where a page shows
           (Longshot Settings: Longshot's options)
@@ -52,9 +52,9 @@ MALS_GLOB = "Mals/*.Product.*.sarc.zs"
 
 TAB = "Pa_Category_%02d"
 GAME_TABS = 4                 # Pa_Category_00..03
-# The - menu's tabs of ours (0.11.9: Multiplayer, Lobby, Mods, right of Map; CoopPauseTab::kMinusTabNames):
-# Pa_Category_04..06, copies of the fourth tab one game step apart after it.
-MINUS_TABS = [TAB % (GAME_TABS + i) for i in range(3)]
+# The - menu's tabs of ours (0.11.9: Multiplayer, Lobby, Mods, right of Map; Navi: and RPG; CoopPauseTab::kMinusTabNames):
+# Pa_Category_04..07, copies of the fourth tab one game step apart after it.
+MINUS_TABS = [TAB % (GAME_TABS + i) for i in range(4)]
 MINUS_SOURCE = TAB % (GAME_TABS - 1)
 TAB_ROOT = "RootPane"
 L_LABEL, R_LABEL = "T_BtnL_00", "T_BtnR_00"
@@ -92,7 +92,7 @@ def _x(d, name):
 
 def add_tab(d):
     """MenuOverlay_00.buil with the - menu's tabs of ours (0.11.9; the owner: Character Select's Characters, then
-    Multiplayer, Lobby and Mods right of Map): Pa_Category_04..06, copies of the fourth tab (Pa_Category_03, the - menu's
+    Multiplayer, Lobby and Mods right of Map): Pa_Category_04..07 (Navi: and RPG), copies of the fourth tab (Pa_Category_03, the - menu's
     Map with Character Select's header) one game step apart after it, under RootPane, stored hidden. The strip counts
     its Pa_Category_%02d parts up to the first missing, so ours follow the game's four; the game's tabs, L and R stay:
     the strip's animation sets the tabs' places, so the module places and shows ours (the way 0.11.6's fifth tab

@@ -67,9 +67,9 @@ inline constexpr int kSystemPage = 5;                  // the System page's cate
 inline constexpr int kPlusMode = 1;
 inline constexpr int kMapCategory = 2;   // the - menu's Map page's category (its last tab: Key Items, Threads, Map)
 // The - menu's tabs of ours (0.11.9, the owner: Multiplayer, Lobby and Mods are tabs right of Map), in order.
-inline constexpr int kMinusTabs = 3;
+inline constexpr int kMinusTabs = 4;   // (Navi: 4, the RPG tab: a code mod's menu tab, mod API 5)
 // (the owner, 0.11.9: Character Select's Characters, then Multiplayer, Lobby (the online Find / Host / Join) and Mods)
-inline constexpr const char* kMinusTabNames[kMinusTabs] = {"Multiplayer", "Lobby", "Mods"};
+inline constexpr const char* kMinusTabNames[kMinusTabs] = {"Multiplayer", "Lobby", "Mods", "RPG"};
 inline constexpr int kRows = 5;                        // the page's buttons (Pa_Button_00..04), System's too
 // The buttons of the pages made of System's layout with the pack's Longshot Settings button (Pa_Button_05: System's
 // last button, and Longshot Settings' sixth category row).
@@ -790,7 +790,7 @@ std::vector<std::string> RowTexts(const SessionView& v);
 //   shown only in one.
 // - Lobby: 0 Find a game, 1 Host a game (or Your game), 2 Join a game (or Your session, Copy answer code).
 // - Mods: the Mods tab's own page (coop_mods_tab.h), not rows of these.
-enum class MinusPage { kMultiplayer = 0, kLobby = 1, kMods = 2 };
+enum class MinusPage { kMultiplayer = 0, kLobby = 1, kMods = 2, kRpg = 3 };   // (kRpg: Navi, a mod's tab)
 std::vector<std::string> RowTexts(MinusPage page, const SessionView& v);
 RowAction ActionFor(MinusPage page, int row, const Session& s);
 // A view's rows (kMain: RowTexts). A row with nothing on it is "": the module does not show it (but while the game's

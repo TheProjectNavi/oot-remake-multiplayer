@@ -2770,13 +2770,15 @@ TEST_CASE("pause tab (0.11.9): the - menu's tabs: R on Map onto Multiplayer, R a
     CHECK(p.MinusTab() == 1);
     p.OnPad(kPadR, now + 56), p.OnPad(0, now + 58);
     CHECK(p.MinusTab() == 2);
+    p.OnPad(kPadR, now + 58), p.OnPad(0, now + 59);   // (Navi: on to RPG, the last)
+    CHECK(p.MinusTab() == 3);
     p.TakeStripSound();
     CHECK(p.OnPad(kPadR, now + 60) == 0);
-    CHECK(p.MinusTab() == 2);
+    CHECK(p.MinusTab() == 3);
     CHECK(p.TakeStripSound() == nullptr);
     p.OnPad(0, now + 62);
     // L back through ours to Map.
-    for (int want : {1, 0, -1}) {
+    for (int want : {2, 1, 0, -1}) {
         CHECK(p.OnPad(kPadL, now + 64) == 0);
         CHECK(p.MinusTab() == want);
         CHECK(std::string(p.TakeStripSound()) == "mc_TabToLeft");

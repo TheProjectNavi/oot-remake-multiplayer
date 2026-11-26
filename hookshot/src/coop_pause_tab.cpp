@@ -1217,6 +1217,7 @@ std::vector<std::string> RowTexts(MinusPage page, const SessionView& v) {
         }
         break;
     case MinusPage::kMods: break;
+    case MinusPage::kRpg: break;   // (Navi: a list page, as Mods)
     }
     return rows;
 }
@@ -1236,6 +1237,7 @@ RowAction ActionFor(MinusPage page, int row, const Session& s) {
         if (row == 3 && (s.in_one || s.by_launcher)) return ActionFor(kRowJoin, s);
         return RowAction::kNone;
     case MinusPage::kMods: return RowAction::kNone;
+    case MinusPage::kRpg: return RowAction::kNone;
     }
     return RowAction::kNone;
 }
@@ -1583,7 +1585,9 @@ const char* MenuTabHelp(int tab) {
 }
 
 std::string MinusHelp(const HelpAt& at, const Session& s) {
-    if (at.tab == MinusPage::kMods) return at.list ? at.menu : std::string();   // (its list only: it has no rows)
+    if (at.tab == MinusPage::kMods || at.tab == MinusPage::kRpg) {
+        return at.list ? at.menu : std::string();   // (its list only: it has no rows)
+    }
     if (at.typing) return kTypingHelp;
     if (at.list) {
         if (at.view == View::kMenu) return at.menu;

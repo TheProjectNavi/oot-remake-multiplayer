@@ -15,6 +15,7 @@ Characters = Characters
 Pa_Category_04-T_Text_00 = Multiplayer
 Pa_Category_05-T_Text_00 = Lobby
 Pa_Category_06-T_Text_00 = Mods
+Pa_Category_07-T_Text_00 = RPG
 # The - menu's own page's rows (Pa_CoopMinus_00's Pa_Button_00..04, Coop_Minus_00..04) and its list on the right
 # (its Pa_List_00..07: a name and a value a line, Coop_Minus_05..20): the co-op module writes their words here while
 # the page shows (coop_pause_tab_module.cpp MinusWords; each exactly 64 dots, as Coop_Live_NN).

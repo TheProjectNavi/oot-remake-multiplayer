@@ -9,6 +9,7 @@ Characters = 角色
 Pa_Category_04-T_Text_00 = 連線
 Pa_Category_05-T_Text_00 = 大廳
 Pa_Category_06-T_Text_00 = 模組
+Pa_Category_07-T_Text_00 = RPG
 
 [LayoutMsg/PlusMenu_00.msbt]
 # The Multiplayer page's five rows. The co-op module writes the live words over them while the page

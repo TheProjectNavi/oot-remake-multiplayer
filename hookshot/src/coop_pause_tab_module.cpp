@@ -4,6 +4,7 @@
 // screen's thread (its panes shown or hidden, its tabs lit, texts from the
 // pack's labels), the pad filtered, the log. Only in hookshot_coop.dll (the
 // tests drive Page and Probe themselves).
+#include "coop_mods_runtime.h"
 #include "coop_i18n.h"
 #include "coop_pause_tab.h"
 #include "coop_list_pages.h"
@@ -2447,12 +2448,76 @@ int ApplyMinusPage(void* ctx, std::uint64_t gen) {
 // cannot be set does not show): the tab's own rows (RowTexts(MinusPage)) or, once a row opened one, its view's rows
 // (RowTexts(View)), and the list on the right: the view's details (DetailLines), the game browser's games
 // (ListLines), the typing keys (TypingLines), co-op's menu's page (Co-op settings, MenuLines) or the Mods tab's page.
+// (Navi) The RPG tab (kMinusTabNames[3]): the code mods' tab named "RPG" (mod API 5, Navi RPG), as a list page drawn
+// as the Mods page is; a note when no mod gives one.
+bool g_minus_rpg_shown = false;
+int g_minus_rpg_top = 0;
+
+int RpgTabIndex() {
+    const auto tabs = CoopModsRuntime::MenuTabs();
+    for (std::size_t i = 0; i < tabs.size(); ++i) {
+        if (tabs[i] == "RPG") return static_cast<int>(i);
+    }
+    return -1;
+}
+
+bool RpgView(CoopPauseMenu::View* out) {
+    *out = CoopPauseMenu::View{};
+    out->change = "Change";
+    out->confirm = "Confirm";
+    out->back = "Back";
+    const int tab = RpgTabIndex();
+    CoopModMenuPage page{};
+    page.size = sizeof page;
+    if (tab < 0 || !CoopModsRuntime::MenuPage(static_cast<std::size_t>(tab), &page)) {
+        CoopPauseMenu::Row note;
+        note.name = "Navi RPG is not running: switch it on in the Mods tab, then start the game again.";
+        note.kind = CoopPauseMenu::RowKind::kNote;
+        note.own_name = true;
+        out->rows.push_back(note);
+        return true;
+    }
+    for (int i = 0; i < page.rows_n; ++i) {
+        const CoopModMenuRow& r = page.rows[i];
+        CoopPauseMenu::Row row;
+        row.name = r.name != nullptr ? r.name : "";
+        row.value = r.value != nullptr ? r.value : "";
+        row.kind = r.kind <= 4 ? static_cast<CoopPauseMenu::RowKind>(r.kind) : CoopPauseMenu::RowKind::kNote;
+        row.on = r.on != 0;
+        row.left = r.left != 0;
+        row.right = r.right != 0;
+        row.fixed = r.fixed != 0;
+        row.own_name = row.own_value = true;   // (the mod's words: never looked up in co-op's table)
+        out->rows.push_back(std::move(row));
+    }
+    out->selected = page.selected >= 0 && page.selected < page.rows_n ? page.selected : -1;
+    out->help_title = page.help_title != nullptr ? page.help_title : "";
+    out->help = page.help != nullptr ? page.help : "";
+    out->hint = page.hint != nullptr ? page.hint : "";
+    return true;
+}
+
+bool RpgInput(int event, int arg, int arg2) {
+    const int tab = RpgTabIndex();
+    return tab >= 0 && CoopModsRuntime::MenuInput(static_cast<std::size_t>(tab), event, arg, arg2);
+}
+
+void FollowRpg(bool shown) {
+    if (shown == g_minus_rpg_shown) return;
+    g_minus_rpg_shown = shown;
+    if (shown) g_minus_rpg_top = 0;
+    RpgInput(shown ? HOS_COOP_MENU_SHOW : HOS_COOP_MENU_HIDE, 0, 0);
+    LOG_INFO(Core, "coop: pause tab: the - menu's RPG page {}", shown ? "shown" : "gone");
+}
+
 // Which lines can be picked go to the Page (SetMinusLines), as whether a view shows (SetMinusInView).
 void FollowSays();
 int g_minus_view_seen = -1;   // the view MinusWords last showed (g_mutex)
 void MinusWords(void* ctx, std::uint64_t layout, std::uint64_t gen, int tab) {
     if (tab < 0 || tab >= kMinusTabs) return;
-    if (tab != static_cast<int>(MinusPage::kMods)) FollowSays();   // (a Host or Join refused: why, on the Session view)
+    if (tab != static_cast<int>(MinusPage::kMods) && tab != static_cast<int>(MinusPage::kRpg)) {
+        FollowSays();   // (a Host or Join refused: why, on the Session view)
+    }
     const View view = ViewShown();
     bool in_list = false;
     int row_now = -1, line_now = -1;   // (the rows' cursor and the list's line, for the help)
@@ -2467,7 +2532,8 @@ void MinusWords(void* ctx, std::uint64_t layout, std::uint64_t gen, int tab) {
     }
     if (view == View::kMenu) g_menu_list = in_list;   // (co-op's menu's selected row in view while the list has the pad)
     const SessionView v = ViewNow(view);
-    const bool mods = tab == static_cast<int>(MinusPage::kMods);
+    const bool rpg = tab == static_cast<int>(MinusPage::kRpg);   // (Navi: a list page, as Mods)
+    const bool mods = tab == static_cast<int>(MinusPage::kMods) || rpg;
     std::vector<std::string> rows = mods                 ? std::vector<std::string>(kRows)
                                     : view == View::kMain ? RowTexts(static_cast<MinusPage>(tab), v)
                                                           : RowTexts(view, v);
@@ -2490,7 +2556,10 @@ void MinusWords(void* ctx, std::uint64_t layout, std::uint64_t gen, int tab) {
         picked = ml.picked >= 0 ? ml.picked + 1 : -1;
     };
     std::string menu_help;   // (co-op's menu's or the Mods tab's help for their row picked)
-    if (mods) {
+    if (rpg) {
+        CoopPauseMenu::View mv;
+        if (RpgView(&mv)) menu_list(mv, -1, &g_minus_rpg_top, "RPG"), menu_help = mv.help;
+    } else if (mods) {
         CoopPauseMenu::View mv;
         if (CoopModsTab::View(&mv, &raw_back)) menu_list(mv, -1, &g_minus_mods_top, "Mods"), menu_help = mv.help;
     } else if (!v.typing_lines.empty()) {
@@ -3666,7 +3735,8 @@ void OnScreen(void* ctx, std::uint64_t screen) noexcept {
             if (minus_words >= 0) MinusWords(ctx, f.layout, gen, minus_words);
             if (minus_decide >= 0) MinusDecide(minus_tab, minus_decide);
             // (the games on this network and the relay's rooms heard while the - page's Find a game shows)
-            const bool finding = minus_tab >= 0 && minus_tab != static_cast<int>(MinusPage::kMods) && ViewShown() == View::kLan;
+            const bool finding = minus_tab >= 0 && minus_tab != static_cast<int>(MinusPage::kMods) &&
+                                 minus_tab != static_cast<int>(MinusPage::kRpg) && ViewShown() == View::kLan;
             CoopLanNet::Look(finding, NowMs());
             if (!(finding && g_online.load())) CoopRoomList::Look(CoopRoomList::Viewer::kFindAGame, false, NowMs(), {});
         }
@@ -4636,6 +4706,7 @@ std::uint64_t OnPad(std::uint64_t buttons, std::int32_t stick[4]) noexcept {
         }
         // (the - menu's page: B back a view, a line picked, co-op's menu's or the Mods tab's own moves)
         const bool minus_mods = minus_tab == static_cast<int>(MinusPage::kMods);
+        const bool minus_rpg = minus_tab == static_cast<int>(MinusPage::kRpg);
         if (minus_tab >= 0) {
             const View view = ViewShown();
             if (minus_back) SetView(BackOf(view));
@@ -4659,7 +4730,11 @@ std::uint64_t OnPad(std::uint64_t buttons, std::int32_t stick[4]) noexcept {
                 if ((minus_moves & Page::kMinusMoveRight) != 0) send(HOS_COOP_MENU_RIGHT, 0);
                 if ((minus_moves & Page::kMinusMoveA) != 0) send(HOS_COOP_MENU_CONFIRM, 0);
             };
-            if (minus_mods) {
+            if (minus_rpg) {
+                FollowRpg(true);
+                moves([](int event, int arg) { RpgInput(event, arg, 0); });
+                if (minus_list_back) RpgInput(HOS_COOP_MENU_BACK, 0, 0);
+            } else if (minus_mods) {
                 FollowMods(true);
                 moves([](int event, int arg) { CoopModsTab::MenuInput(event, arg, 0); });
                 if (minus_list_back) CoopModsTab::MenuInput(HOS_COOP_MENU_BACK, 0, 0);
@@ -4670,6 +4745,7 @@ std::uint64_t OnPad(std::uint64_t buttons, std::int32_t stick[4]) noexcept {
             if (minus_moves != 0 || minus_list_back || minus_back || minus_line >= 0) g_live_poke = true;
         }
         if (!minus_mods) FollowMods(false);
+        if (!minus_rpg) FollowRpg(false);
         FollowMenu(shown || minus_tab >= 0);
         for (const MenuEvent& e : menu_events) CoopPause::NativeInput(e.event, e.arg, e.arg2);
         for (const std::uint32_t k : menu_keys) CoopPause::Key(k, false);
